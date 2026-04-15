@@ -5,9 +5,7 @@
 ## 快速开始（Linux）
 
 ```bash
-curl -O https://raw.githubusercontent.com/oh-my-porjects/omps/main/setup.sh
-chmod +x setup.sh
-sudo ./setup.sh
+curl -fsSL https://raw.githubusercontent.com/oh-my-porjects/omps/main/setup.sh | sudo bash
 ```
 
 脚本会自动完成：SSH Key 配置、Docker 安装、Node.js 安装、WireGuard 安装、Claude CLI / Codex CLI 安装、Admin 平台部署、CLI Server 构建启动。
