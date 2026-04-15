@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
+SCRIPT_VERSION="2026.04.15"
+
 # Oh My Projects 平台一键部署脚本
 # 用法:
 #   ./setup.sh          首次部署（含 SSH 检查 + clone workspace）
@@ -95,7 +97,7 @@ if [[ "$MODE" == "update" ]]; then
 
   echo ""
   echo -e "${BLUE}  ┌──────────────────────────────────┐${NC}"
-  echo -e "${BLUE}  │   Oh My Projects 平台更新        │${NC}"
+  echo -e "${BLUE}  │   Oh My Projects 平台更新  ${DIM}$SCRIPT_VERSION${NC}${BLUE}  │${NC}"
   echo -e "${BLUE}  └──────────────────────────────────┘${NC}"
 
   step "拉取最新代码"
@@ -178,7 +180,7 @@ fi
 
 echo ""
 echo -e "${BLUE}  ┌──────────────────────────────────┐${NC}"
-echo -e "${BLUE}  │   Oh My Projects 平台部署        │${NC}"
+echo -e "${BLUE}  │   Oh My Projects 平台部署  ${DIM}$SCRIPT_VERSION${NC}${BLUE}  │${NC}"
 echo -e "${BLUE}  └──────────────────────────────────┘${NC}"
 echo ""
 echo -e "   系统: ${BOLD}$OS $ARCH${NC}"
