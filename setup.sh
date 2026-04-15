@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.15.4"
+SCRIPT_VERSION="2026.04.15.5"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -490,7 +490,7 @@ fi
 step "部署 Admin 平台"
 cd "$SCRIPT_DIR"
 
-run_spin "构建 Admin Server..." docker compose build server
+run_spin "构建 Admin Server..." docker compose build --no-cache server
 run_quiet "启动容器" docker compose up -d
 
 info "等待 Admin Server 就绪..."
