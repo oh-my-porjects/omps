@@ -313,10 +313,19 @@ install_docker_mac() {
 }
 
 install_docker_linux() {
-  run_spin "安装 Docker..." bash -c "curl -fsSL https://get.docker.com | sh"
-  sudo usermod -aG docker "$USER"
-  warn "已将当前用户加入 docker 组，请重新登录后再运行此脚本"
-  exit 0
+  info "通过官方脚本安装 Docker..."
+  curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+  run_spin "安装 Docker..." sh /tmp/get-docker.sh
+  rm -f /tmp/get-docker.sh
+  if ! command -v docker &>/dev/null; then
+    fail "Docker 安装失败"
+  fi
+  # root 用户不需要加 docker 组
+  if [[ "$EUID" -ne 0 ]]; then
+    sudo usermod -aG docker "$USER"
+    warn "已将当前用户加入 docker 组，如遇权限问题请重新登录"
+  fi
+  ok "Docker 安装完成"
 }
 
 if command -v docker &>/dev/null; then
