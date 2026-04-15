@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.15"
+SCRIPT_VERSION="2026.04.15.1"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -298,6 +298,14 @@ else
     ok "Workspace 克隆完成"
   fi
   SCRIPT_DIR="$(pwd)"
+fi
+
+# 拉取子仓库
+cd "$SCRIPT_DIR"
+if [[ -f "pull.sh" ]]; then
+  info "拉取子仓库..."
+  bash pull.sh
+  ok "子仓库就绪"
 fi
 
 # ── 3. Docker ──
