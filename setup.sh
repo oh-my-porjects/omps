@@ -21,7 +21,7 @@ NC='\033[0m'
 WORKSPACE_REPO="git@github.com:oh-my-porjects/omps-dev-workspace.git"
 WORKSPACE_DIR="omps-platform"
 
-TOTAL_STEPS=10
+TOTAL_STEPS=11
 MODE="install"
 if [[ "$1" == "update" ]]; then
   MODE="update"
@@ -183,7 +183,57 @@ echo -e "${BLUE}  └───────────────────�
 echo ""
 echo -e "   系统: ${BOLD}$OS $ARCH${NC}"
 
-# ── 1. SSH Key ──
+# ── 1. SSH 端口（仅 Linux）──
+
+if [[ "$OS" == "Linux" ]]; then
+  step "检查 SSH 端口"
+
+  SSHD_CONFIG="/etc/ssh/sshd_config"
+  CURRENT_PORT=$(grep -E "^Port " "$SSHD_CONFIG" 2>/dev/null | awk '{print $2}')
+  # 如果没有显式配置 Port，默认是 22
+  [[ -z "$CURRENT_PORT" ]] && CURRENT_PORT=22
+
+  if [[ "$CURRENT_PORT" == "22" ]]; then
+    warn "当前 SSH 端口为 22，建议修改以提高安全性"
+    read -rp "$(echo -e "   ${BLUE}▸${NC} 输入新端口（默认 19822）: ")" NEW_PORT
+    NEW_PORT="${NEW_PORT:-19822}"
+
+    # 校验端口号
+    if ! [[ "$NEW_PORT" =~ ^[0-9]+$ ]] || [[ "$NEW_PORT" -lt 1024 || "$NEW_PORT" -gt 65535 ]]; then
+      fail "端口号无效（需要 1024-65535）"
+    fi
+
+    # 修改 sshd 配置
+    if grep -qE "^Port " "$SSHD_CONFIG"; then
+      sudo sed -i "s/^Port .*/Port $NEW_PORT/" "$SSHD_CONFIG"
+    elif grep -qE "^#Port " "$SSHD_CONFIG"; then
+      sudo sed -i "s/^#Port .*/Port $NEW_PORT/" "$SSHD_CONFIG"
+    else
+      echo "Port $NEW_PORT" | sudo tee -a "$SSHD_CONFIG" > /dev/null
+    fi
+
+    # 重启 sshd
+    if sudo systemctl restart sshd 2>/dev/null || sudo systemctl restart ssh 2>/dev/null; then
+      ok "SSH 端口已修改为 $NEW_PORT"
+      echo ""
+      echo -e "   ${YELLOW}┌──────────────────────────────────────┐${NC}"
+      echo -e "   ${YELLOW}│  重要：请记住新的 SSH 端口           │${NC}"
+      echo -e "   ${YELLOW}│${NC}  ssh -p ${BOLD}$NEW_PORT${NC} root@<IP>"
+      echo -e "   ${YELLOW}│${NC}  不要关闭当前终端，先用新端口测试  "
+      echo -e "   ${YELLOW}└──────────────────────────────────────┘${NC}"
+      echo ""
+    else
+      fail "sshd 重启失败，请手动检查配置"
+    fi
+  else
+    ok "SSH 端口: $CURRENT_PORT"
+  fi
+else
+  # macOS 跳过，不计入步骤
+  CURRENT_STEP=$((CURRENT_STEP + 1))
+fi
+
+# ── 2. SSH Key ──
 
 step "检查 SSH Key"
 
