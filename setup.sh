@@ -7,13 +7,14 @@ set -e
 #   ./setup.sh update   拉取最新代码并重建
 #
 # 快速开始（无需提前 clone）:
-#   curl -O https://raw.githubusercontent.com/oh-my-porjects/omps-setup/main/setup.sh
-#   chmod +x setup.sh && ./setup.sh
+#   curl -O https://raw.githubusercontent.com/oh-my-porjects/omps/main/setup.sh
+#   chmod +x setup.sh && sudo ./setup.sh
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+DIM='\033[2m'
 BOLD='\033[1m'
 NC='\033[0m'
 
@@ -28,11 +29,59 @@ if [[ "$1" == "update" ]]; then
 fi
 
 CURRENT_STEP=0
-step()  { CURRENT_STEP=$((CURRENT_STEP + 1)); echo -e "\n${BOLD}[$CURRENT_STEP/$TOTAL_STEPS] $1${NC}"; }
-info()  { echo -e "${BLUE}[INFO]${NC} $1"; }
-ok()    { echo -e "${GREEN}[ OK ]${NC} $1"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $1"; }
-fail()  { echo -e "${RED}[FAIL]${NC} $1"; exit 1; }
+LOG_FILE=$(mktemp /tmp/omps-setup-XXXXXX.log)
+
+step() {
+  CURRENT_STEP=$((CURRENT_STEP + 1))
+  echo ""
+  echo -e "${BOLD}── [$CURRENT_STEP/$TOTAL_STEPS] $1 ──────────────────────────${NC}"
+}
+info()  { echo -e "   ${BLUE}▸${NC} $1"; }
+ok()    { echo -e "   ${GREEN}✓${NC} $1"; }
+warn()  { echo -e "   ${YELLOW}!${NC} $1"; }
+fail()  { echo -e "   ${RED}✗${NC} $1"; echo -e "   ${DIM}日志: $LOG_FILE${NC}"; exit 1; }
+
+# 静默执行命令，失败时显示日志尾部
+run_quiet() {
+  local desc="$1"; shift
+  > "$LOG_FILE"
+  if "$@" >>"$LOG_FILE" 2>&1; then
+    return 0
+  else
+    local code=$?
+    echo -e "   ${RED}✗${NC} $desc"
+    echo -e "   ${DIM}─── 错误日志（最后 15 行）───${NC}"
+    tail -15 "$LOG_FILE" | sed 's/^/   /'
+    echo -e "   ${DIM}────────────────────────────${NC}"
+    return $code
+  fi
+}
+
+# 后台运行 + spinner
+run_spin() {
+  local desc="$1"; shift
+  > "$LOG_FILE"
+  "$@" >>"$LOG_FILE" 2>&1 &
+  local pid=$!
+  local chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+  local i=0
+  while kill -0 "$pid" 2>/dev/null; do
+    printf "\r   ${BLUE}%s${NC} %s" "${chars:i%${#chars}:1}" "$desc"
+    i=$((i + 1))
+    sleep 0.1
+  done
+  wait "$pid"
+  local code=$?
+  printf "\r\033[K"
+  if [[ $code -ne 0 ]]; then
+    echo -e "   ${RED}✗${NC} $desc"
+    echo -e "   ${DIM}─── 错误日志（最后 15 行）───${NC}"
+    tail -15 "$LOG_FILE" | sed 's/^/   /'
+    echo -e "   ${DIM}────────────────────────────${NC}"
+    return $code
+  fi
+  return 0
+}
 
 OS="$(uname -s)"
 ARCH="$(uname -m)"
@@ -45,27 +94,24 @@ if [[ "$MODE" == "update" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
   echo ""
-  echo -e "${BLUE}========================================${NC}"
-  echo -e "${BLUE}  Oh My Projects 平台更新${NC}"
-  echo -e "${BLUE}========================================${NC}"
-  echo ""
+  echo -e "${BLUE}  ┌──────────────────────────────────┐${NC}"
+  echo -e "${BLUE}  │   Oh My Projects 平台更新        │${NC}"
+  echo -e "${BLUE}  └──────────────────────────────────┘${NC}"
 
   step "拉取最新代码"
   cd "$SCRIPT_DIR"
 
   if [[ -d .git ]]; then
-    info "更新主仓库..."
-    git fetch --all
-    git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
+    run_quiet "更新主仓库" git fetch --all
+    run_quiet "重置主仓库" git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
     ok "主仓库已更新"
   fi
 
   for dir in admin-server admin-web runtime cli-server project-admin-web project-template module-template; do
     if [[ -d "$dir/.git" ]]; then
-      info "更新 $dir/..."
       cd "$SCRIPT_DIR/$dir"
-      git fetch --all
-      git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
+      run_quiet "拉取 $dir" git fetch --all
+      run_quiet "重置 $dir" git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
       cd "$SCRIPT_DIR"
       ok "$dir 已更新"
     fi
@@ -73,11 +119,11 @@ if [[ "$MODE" == "update" ]]; then
 
   step "重建 Admin Server"
   cd "$SCRIPT_DIR"
-  docker compose build --no-cache server
+  run_spin "构建镜像..." docker compose build --no-cache server
   ok "Admin Server 构建完成"
 
   step "重启 Admin 平台"
-  docker compose up -d --force-recreate
+  run_quiet "重启容器" docker compose up -d --force-recreate
   info "等待 Admin Server 就绪..."
   for i in $(seq 1 30); do
     HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8181/api/dashboard -H "Authorization: Bearer test" 2>/dev/null || echo "000")
@@ -90,7 +136,7 @@ if [[ "$MODE" == "update" ]]; then
   if [[ -d "$SCRIPT_DIR/cli-server" ]]; then
     GO_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
     GO_ARCH=$( [[ "$ARCH" == "arm64" ]] && echo arm64 || echo amd64 )
-    docker run --rm -v "$SCRIPT_DIR/cli-server:/app" -w /app golang:1.26 \
+    run_spin "编译 Go 二进制..." docker run --rm -v "$SCRIPT_DIR/cli-server:/app" -w /app golang:1.26 \
       sh -c "CGO_ENABLED=0 GOOS=$GO_OS GOARCH=$GO_ARCH go build -o cli-server ./cmd/server"
     ok "CLI Server 构建完成"
   else
@@ -116,12 +162,12 @@ if [[ "$MODE" == "update" ]]; then
   fi
 
   echo ""
-  echo -e "${GREEN}========================================${NC}"
-  echo -e "${GREEN}  更新完成${NC}"
-  echo -e "${GREEN}========================================${NC}"
+  echo -e "${GREEN}  ┌──────────────────────────────────┐${NC}"
+  echo -e "${GREEN}  │   更新完成                       │${NC}"
+  echo -e "${GREEN}  └──────────────────────────────────┘${NC}"
   echo ""
-  echo "  服务状态:"
-  docker ps --filter "label=com.docker.compose.project=omps-platform" --format "    ✓ {{.Names}}  {{.Status}}" 2>/dev/null || true
+  echo "   服务状态:"
+  docker ps --filter "label=com.docker.compose.project=omps-platform" --format "   ✓ {{.Names}}  {{.Status}}" 2>/dev/null || true
   echo ""
   exit 0
 fi
@@ -131,13 +177,13 @@ fi
 # ══════════════════════════════════════
 
 echo ""
-echo -e "${BLUE}========================================${NC}"
-echo -e "${BLUE}  Oh My Projects 平台部署${NC}"
-echo -e "${BLUE}========================================${NC}"
+echo -e "${BLUE}  ┌──────────────────────────────────┐${NC}"
+echo -e "${BLUE}  │   Oh My Projects 平台部署        │${NC}"
+echo -e "${BLUE}  └──────────────────────────────────┘${NC}"
 echo ""
-info "系统: $OS $ARCH"
+echo -e "   系统: ${BOLD}$OS $ARCH${NC}"
 
-# ── 1/9 SSH Key ──
+# ── 1. SSH Key ──
 
 step "检查 SSH Key"
 
@@ -149,7 +195,7 @@ if [[ -f "$SSH_PUB" ]]; then
 else
   info "生成 SSH Key..."
   mkdir -p "$HOME/.ssh"
-  ssh-keygen -t ed25519 -C "omps-setup" -f "$SSH_KEY" -N ""
+  ssh-keygen -t ed25519 -C "omps-setup" -f "$SSH_KEY" -N "" >/dev/null 2>&1
   ok "SSH Key 已生成"
 fi
 
@@ -158,34 +204,31 @@ if ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
   ok "GitHub SSH 连接正常"
 else
   echo ""
-  echo -e "${YELLOW}────────────────────────────────────────${NC}"
-  echo -e "${YELLOW}  请将以下公钥添加到 GitHub${NC}"
-  echo -e "${YELLOW}────────────────────────────────────────${NC}"
+  echo -e "   ${YELLOW}┌────────────────────────────────────────┐${NC}"
+  echo -e "   ${YELLOW}│  请将以下公钥添加到 GitHub             │${NC}"
+  echo -e "   ${YELLOW}└────────────────────────────────────────┘${NC}"
   echo ""
-  cat "$SSH_PUB"
+  echo -e "   ${DIM}$(cat "$SSH_PUB")${NC}"
   echo ""
-  echo -e "${YELLOW}────────────────────────────────────────${NC}"
-  echo ""
-  echo "  步骤:"
-  echo "  1. 复制上面的公钥"
-  echo "  2. 打开 https://github.com/settings/ssh/new"
-  echo "  3. Title 填: omps-$(hostname)"
-  echo "  4. Key 粘贴公钥"
-  echo "  5. 点击 Add SSH key"
+  echo -e "   步骤:"
+  echo -e "   1. 复制上面的公钥"
+  echo -e "   2. 打开 ${BLUE}https://github.com/settings/ssh/new${NC}"
+  echo -e "   3. Title 填: ${BOLD}omps-$(hostname)${NC}"
+  echo -e "   4. Key 粘贴公钥，点击 Add SSH key"
   echo ""
 
   while true; do
-    read -rp "$(echo -e "${BLUE}已添加到 GitHub？按回车验证连接...${NC}")" _
+    read -rp "$(echo -e "   ${BLUE}▸${NC} 已添加？按回车验证...")" _
     if ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
       ok "GitHub SSH 连接成功"
       break
     else
-      warn "连接失败，请确认公钥已添加到 GitHub 后重试"
+      warn "连接失败，请确认公钥已添加后重试"
     fi
   done
 fi
 
-# ── 2/9 克隆 Workspace ──
+# ── 2. 克隆 Workspace ──
 
 step "克隆 Workspace"
 
@@ -198,22 +241,20 @@ else
     ok "$WORKSPACE_DIR/ 已存在"
     cd "$WORKSPACE_DIR"
   else
-    info "克隆 $WORKSPACE_REPO..."
-    git clone --recursive "$WORKSPACE_REPO" "$WORKSPACE_DIR"
+    run_spin "克隆仓库..." git clone --recursive "$WORKSPACE_REPO" "$WORKSPACE_DIR"
     cd "$WORKSPACE_DIR"
     ok "Workspace 克隆完成"
   fi
   SCRIPT_DIR="$(pwd)"
 fi
 
-# ── 3/9 Docker ──
+# ── 3. Docker ──
 
 step "检查 Docker"
 
 install_docker_mac() {
   if command -v brew &>/dev/null; then
-    info "通过 Homebrew 安装 Docker Desktop..."
-    brew install --cask docker
+    run_spin "安装 Docker Desktop..." brew install --cask docker
     info "请启动 Docker Desktop，等待就绪后重新运行此脚本"
     exit 0
   else
@@ -222,8 +263,7 @@ install_docker_mac() {
 }
 
 install_docker_linux() {
-  info "通过官方脚本安装 Docker..."
-  curl -fsSL https://get.docker.com | sh
+  run_spin "安装 Docker..." bash -c "curl -fsSL https://get.docker.com | sh"
   sudo usermod -aG docker "$USER"
   warn "已将当前用户加入 docker 组，请重新登录后再运行此脚本"
   exit 0
@@ -260,7 +300,7 @@ fi
 docker compose version &>/dev/null || fail "Docker Compose 未安装，请升级 Docker"
 ok "Docker Compose $(docker compose version --short)"
 
-# ── 4/10 WireGuard ──
+# ── 4. WireGuard ──
 
 step "检查 WireGuard"
 
@@ -271,16 +311,17 @@ else
   case "$OS" in
     Darwin)
       if command -v brew &>/dev/null; then
-        brew install wireguard-tools
+        run_quiet "安装 wireguard-tools" brew install wireguard-tools
       else
         warn "请手动安装: brew install wireguard-tools"
       fi
       ;;
     Linux)
       if command -v apt-get &>/dev/null; then
-        sudo apt-get update -qq && sudo apt-get install -y wireguard-tools
+        run_quiet "更新包索引" sudo apt-get update -qq
+        run_quiet "安装 wireguard-tools" sudo apt-get install -y wireguard-tools
       elif command -v yum &>/dev/null; then
-        sudo yum install -y wireguard-tools
+        run_quiet "安装 wireguard-tools" sudo yum install -y wireguard-tools
       else
         warn "请手动安装 wireguard-tools"
       fi
@@ -293,41 +334,37 @@ else
   fi
 fi
 
-# 配置 WireGuard 免密 sudo（cli-server 远程部署时需要）
+# 配置 WireGuard 免密 sudo
 if command -v wg &>/dev/null; then
   WG_PATH=$(which wg)
   WG_QUICK_PATH=$(which wg-quick)
   SUDOERS_FILE="/etc/sudoers.d/omps-wireguard"
   if [[ ! -f "$SUDOERS_FILE" ]] || ! sudo -n true 2>/dev/null || ! sudo grep -qF "$WG_QUICK_PATH" "$SUDOERS_FILE" 2>/dev/null; then
-    info "配置 WireGuard 免密 sudo（需要输入密码）..."
+    info "配置 WireGuard 免密 sudo..."
     SUDOERS_LINE="$USER ALL=(ALL) NOPASSWD: $WG_QUICK_PATH, $WG_PATH"
-    echo "$SUDOERS_LINE" | sudo tee "$SUDOERS_FILE" > /dev/null && sudo chmod 440 "$SUDOERS_FILE" && ok "WireGuard sudo 已配置" || warn "sudo 配置失败，远程部署时 WireGuard 可能不可用"
+    echo "$SUDOERS_LINE" | sudo tee "$SUDOERS_FILE" > /dev/null && sudo chmod 440 "$SUDOERS_FILE" && ok "WireGuard sudo 已配置" || warn "sudo 配置失败"
   else
     ok "WireGuard sudo 已配置"
   fi
 fi
 
-# ── 5/10 Node.js ──
+# ── 5. Node.js ──
 
 step "检查 Node.js"
 
 install_node_mac() {
   if command -v brew &>/dev/null; then
-    info "通过 Homebrew 安装 Node.js..."
-    brew install node
+    run_spin "安装 Node.js..." brew install node
   else
     fail "未安装 Homebrew，请先安装: https://brew.sh"
   fi
 }
 
 install_node_linux() {
-  info "通过 NodeSource 安装 Node.js 22..."
   if command -v apt-get &>/dev/null; then
-    curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-    sudo apt-get install -y nodejs
+    run_spin "安装 Node.js 22..." bash -c "curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs"
   elif command -v yum &>/dev/null; then
-    curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
-    sudo yum install -y nodejs
+    run_spin "安装 Node.js 22..." bash -c "curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash - && sudo yum install -y nodejs"
   else
     fail "不支持的包管理器，请手动安装 Node.js: https://nodejs.org"
   fi
@@ -356,37 +393,35 @@ if [[ "$NEED_NODE" == "true" ]]; then
   ok "Node.js $(node -v) 安装完成"
 fi
 
-# ── 5/9 Claude CLI ──
+# ── 6. Claude CLI ──
 
 step "安装 Claude CLI"
 
 if command -v claude &>/dev/null; then
   ok "Claude CLI 已安装"
 else
-  info "安装中..."
-  npm install -g @anthropic-ai/claude-code
+  run_spin "安装中..." npm install -g @anthropic-ai/claude-code
   ok "Claude CLI 安装完成"
 fi
 
-# ── 6/9 Codex CLI ──
+# ── 7. Codex CLI ──
 
 step "安装 Codex CLI"
 
 if command -v codex &>/dev/null; then
   ok "Codex CLI 已安装"
 else
-  info "安装中..."
-  npm install -g @openai/codex
+  run_spin "安装中..." npm install -g @openai/codex
   ok "Codex CLI 安装完成"
 fi
 
-# ── 7/9 Admin 平台 ──
+# ── 8. Admin 平台 ──
 
 step "部署 Admin 平台"
 cd "$SCRIPT_DIR"
 
-docker compose build server
-docker compose up -d
+run_spin "构建 Admin Server..." docker compose build server
+run_quiet "启动容器" docker compose up -d
 
 info "等待 Admin Server 就绪..."
 for i in $(seq 1 30); do
@@ -396,23 +431,22 @@ for i in $(seq 1 30); do
 done
 ok "Admin 平台已启动"
 
-# ── 8/9 CLI Server 构建 ──
+# ── 9. CLI Server 构建 ──
 
 step "构建 CLI Server"
 CLI_PID=""
 
 if [[ -d "$SCRIPT_DIR/cli-server" ]]; then
-  info "使用 Docker 编译（Go 1.26）..."
   GO_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
   GO_ARCH=$( [[ "$ARCH" == "arm64" ]] && echo arm64 || echo amd64 )
-  docker run --rm -v "$SCRIPT_DIR/cli-server:/app" -w /app golang:1.26 \
+  run_spin "编译 Go 二进制..." docker run --rm -v "$SCRIPT_DIR/cli-server:/app" -w /app golang:1.26 \
     sh -c "CGO_ENABLED=0 GOOS=$GO_OS GOARCH=$GO_ARCH go build -o cli-server ./cmd/server"
   ok "CLI Server 构建完成"
 else
   warn "cli-server/ 目录不存在，跳过"
 fi
 
-# ── 9/9 CLI Server 启动 ──
+# ── 10. CLI Server 启动 ──
 
 step "启动 CLI Server"
 
@@ -438,12 +472,10 @@ fi
 # ── 开机自启（Linux）──
 
 if [[ "$OS" == "Linux" ]]; then
-  # Docker 开机自启
   if command -v systemctl &>/dev/null; then
     sudo systemctl enable docker 2>/dev/null && info "Docker 已设置开机自启"
   fi
 
-  # CLI Server systemd 服务
   if [[ -f "$SCRIPT_DIR/cli-server/cli-server" ]]; then
     SERVICE_FILE="/etc/systemd/system/omps-cli-server.service"
     if [[ ! -f "$SERVICE_FILE" ]]; then
@@ -468,7 +500,6 @@ WantedBy=multi-user.target
 UNIT
       sudo systemctl daemon-reload
       sudo systemctl enable omps-cli-server
-      # 用 systemd 管理，停掉手动启动的进程
       pkill -f "cli-server/cli-server" 2>/dev/null || true
       sudo systemctl start omps-cli-server
       ok "CLI Server 已配置为 systemd 服务（开机自启）"
@@ -485,7 +516,6 @@ TEMP_USER=""
 TEMP_PASS=""
 ENTRY_PATH=""
 
-# 等待 API 就绪
 for i in $(seq 1 15); do
   if curl -sf http://localhost:8181/api/dashboard >/dev/null 2>&1 || curl -sf http://localhost:8181/api/auth/me >/dev/null 2>&1; then
     break
@@ -493,7 +523,6 @@ for i in $(seq 1 15); do
   sleep 2
 done
 
-# 创建临时账号（仅首次部署，无账号时）
 TEMP_RESULT=$(curl -sf -X POST http://localhost:8181/api/auth/create-temp-account -H "Content-Type: application/json" 2>/dev/null)
 if [[ $? -eq 0 && -n "$TEMP_RESULT" ]]; then
   TEMP_USER=$(echo "$TEMP_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('username',''))" 2>/dev/null)
@@ -504,35 +533,36 @@ fi
 # ── 摘要 ──
 
 echo ""
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}  部署完成${NC}"
-echo -e "${GREEN}========================================${NC}"
+echo -e "${GREEN}  ┌──────────────────────────────────┐${NC}"
+echo -e "${GREEN}  │   部署完成                       │${NC}"
+echo -e "${GREEN}  └──────────────────────────────────┘${NC}"
 echo ""
 if [[ -n "$TEMP_USER" && -n "$ENTRY_PATH" ]]; then
-  echo -e "  ${YELLOW}╔══════════════════════════════════════╗${NC}"
-  echo -e "  ${YELLOW}║  请保存以下信息（仅显示一次）       ║${NC}"
-  echo -e "  ${YELLOW}╠══════════════════════════════════════╣${NC}"
-  echo -e "  ${YELLOW}║${NC}  入口地址: ${BLUE}http://localhost:3000/${ENTRY_PATH}${NC}"
-  echo -e "  ${YELLOW}║${NC}  临时账号: ${BOLD}${TEMP_USER}${NC}"
-  echo -e "  ${YELLOW}║${NC}  临时密码: ${BOLD}${TEMP_PASS}${NC}"
-  echo -e "  ${YELLOW}╠══════════════════════════════════════╣${NC}"
-  echo -e "  ${YELLOW}║  登录后创建正式账号并绑定 OTP       ║${NC}"
-  echo -e "  ${YELLOW}║  需安装 Google Authenticator 等应用  ║${NC}"
-  echo -e "  ${YELLOW}╚══════════════════════════════════════╝${NC}"
+  echo -e "   ${YELLOW}┌──────────────────────────────────────┐${NC}"
+  echo -e "   ${YELLOW}│  请保存以下信息（仅显示一次）       │${NC}"
+  echo -e "   ${YELLOW}├──────────────────────────────────────┤${NC}"
+  echo -e "   ${YELLOW}│${NC} 入口  ${BLUE}http://localhost:3000/${ENTRY_PATH}${NC}"
+  echo -e "   ${YELLOW}│${NC} 账号  ${BOLD}${TEMP_USER}${NC}"
+  echo -e "   ${YELLOW}│${NC} 密码  ${BOLD}${TEMP_PASS}${NC}"
+  echo -e "   ${YELLOW}├──────────────────────────────────────┤${NC}"
+  echo -e "   ${YELLOW}│${NC} 登录后创建正式账号并绑定 OTP"
+  echo -e "   ${YELLOW}│${NC} 需安装 Google Authenticator 等应用"
+  echo -e "   ${YELLOW}└──────────────────────────────────────┘${NC}"
 else
-  echo -e "  管理后台     ${BLUE}http://localhost:3000${NC}"
+  echo -e "   管理后台  ${BLUE}http://localhost:3000${NC}"
 fi
 echo ""
-echo -e "  API          ${BLUE}http://localhost:8181${NC}"
-echo -e "  CLI Server   ${BLUE}http://localhost:9100${NC}"
+echo -e "   API       ${BLUE}http://localhost:8181${NC}"
+echo -e "   CLI       ${BLUE}http://localhost:9100${NC}"
 echo ""
-echo "  服务状态:"
-docker ps --filter "label=com.docker.compose.project=omps-platform" --format "    ✓ {{.Names}}  {{.Status}}" 2>/dev/null || true
+echo "   服务状态:"
+docker ps --filter "label=com.docker.compose.project=omps-platform" --format "   ✓ {{.Names}}  {{.Status}}" 2>/dev/null || true
 if [[ -n "$CLI_PID" ]] && kill -0 "$CLI_PID" 2>/dev/null; then
-  echo "    ✓ cli-server  Running (PID: $CLI_PID)"
+  echo "   ✓ cli-server  Running (PID: $CLI_PID)"
 fi
 echo ""
-echo "  CLI:"
-echo "    claude  $(claude --version 2>/dev/null || echo '未安装')"
-echo "    codex   $(codex --version 2>/dev/null || echo '未安装')"
+echo -e "   CLI:"
+echo -e "   claude  ${DIM}$(claude --version 2>/dev/null || echo '未安装')${NC}"
+echo -e "   codex   ${DIM}$(codex --version 2>/dev/null || echo '未安装')${NC}"
 echo ""
+rm -f "$LOG_FILE"
