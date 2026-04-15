@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.15.5"
+SCRIPT_VERSION="2026.04.15.6"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
