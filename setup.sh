@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.15.3"
+SCRIPT_VERSION="2026.04.15.4"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -51,8 +51,8 @@ run_quiet() {
   "$@" >>"$LOG_FILE" 2>&1 </dev/null || code=$?
   if [[ $code -ne 0 ]]; then
     echo -e "   ${RED}✗${NC} $desc"
-    echo -e "   ${DIM}─── 错误日志（最后 15 行）───${NC}"
-    tail -15 "$LOG_FILE" | sed 's/^/   /'
+    echo -e "   ${DIM}─── 错误日志（最后 30 行）───${NC}"
+    tail -30 "$LOG_FILE" | sed 's/^/   /'
     echo -e "   ${DIM}────────────────────────────${NC}"
     return $code
   fi
@@ -77,8 +77,8 @@ run_spin() {
   printf "\r\033[K"
   if [[ $code -ne 0 ]]; then
     echo -e "   ${RED}✗${NC} $desc"
-    echo -e "   ${DIM}─── 错误日志（最后 15 行）───${NC}"
-    tail -15 "$LOG_FILE" | sed 's/^/   /'
+    echo -e "   ${DIM}─── 错误日志（最后 30 行）───${NC}"
+    tail -30 "$LOG_FILE" | sed 's/^/   /'
     echo -e "   ${DIM}────────────────────────────${NC}"
     return $code
   fi
