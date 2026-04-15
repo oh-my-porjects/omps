@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.15.2"
+SCRIPT_VERSION="2026.04.15.3"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -351,8 +351,9 @@ if [[ -f "docker-compose.yml" && -d "admin-server" ]]; then
   SCRIPT_DIR="$(pwd)"
 else
   if [[ -d "$WORKSPACE_DIR" ]]; then
-    ok "$WORKSPACE_DIR/ 已存在"
     cd "$WORKSPACE_DIR"
+    run_quiet "更新 workspace" git pull --ff-only
+    ok "$WORKSPACE_DIR/ 已更新"
   else
     run_spin "克隆仓库..." git clone --recursive "$WORKSPACE_REPO" "$WORKSPACE_DIR"
     cd "$WORKSPACE_DIR"
