@@ -45,16 +45,16 @@ fail()  { echo -e "   ${RED}✗${NC} $1"; echo -e "   ${DIM}日志: $LOG_FILE${N
 run_quiet() {
   local desc="$1"; shift
   > "$LOG_FILE"
-  if "$@" >>"$LOG_FILE" 2>&1 </dev/null; then
-    return 0
-  else
-    local code=$?
+  local code=0
+  "$@" >>"$LOG_FILE" 2>&1 </dev/null || code=$?
+  if [[ $code -ne 0 ]]; then
     echo -e "   ${RED}✗${NC} $desc"
     echo -e "   ${DIM}─── 错误日志（最后 15 行）───${NC}"
     tail -15 "$LOG_FILE" | sed 's/^/   /'
     echo -e "   ${DIM}────────────────────────────${NC}"
     return $code
   fi
+  return 0
 }
 
 # 后台运行 + spinner
@@ -70,8 +70,8 @@ run_spin() {
     i=$((i + 1))
     sleep 0.1
   done
-  wait "$pid"
-  local code=$?
+  local code=0
+  wait "$pid" || code=$?
   printf "\r\033[K"
   if [[ $code -ne 0 ]]; then
     echo -e "   ${RED}✗${NC} $desc"
