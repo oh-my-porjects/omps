@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.15.6"
+SCRIPT_VERSION="2026.04.15.7"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -521,36 +521,14 @@ fi
 step "启动 CLI Server"
 
 if [[ -f "$SCRIPT_DIR/cli-server/cli-server" ]]; then
+  # 先清理所有已有进程
   pkill -f "cli-server/cli-server" 2>/dev/null || true
   sleep 1
 
-  cd "$SCRIPT_DIR/cli-server"
-  nohup ./cli-server > cli-server.log 2>&1 &
-  CLI_PID=$!
-  cd "$SCRIPT_DIR"
-  sleep 2
-
-  if kill -0 $CLI_PID 2>/dev/null; then
-    ok "CLI Server 已启动 (PID: $CLI_PID, 端口 9100)"
-  else
-    warn "CLI Server 启动失败，查看日志: cli-server/cli-server.log"
-  fi
-else
-  warn "CLI Server 二进制不存在，跳过启动"
-fi
-
-# ── 开机自启（Linux）──
-
-if [[ "$OS" == "Linux" ]]; then
-  if command -v systemctl &>/dev/null; then
-    sudo systemctl enable docker 2>/dev/null && info "Docker 已设置开机自启"
-  fi
-
-  if [[ -f "$SCRIPT_DIR/cli-server/cli-server" ]]; then
+  if [[ "$OS" == "Linux" ]] && command -v systemctl &>/dev/null; then
+    # Linux: 统一用 systemd 管理
     SERVICE_FILE="/etc/systemd/system/omps-cli-server.service"
-    if [[ ! -f "$SERVICE_FILE" ]]; then
-      info "配置 CLI Server 开机自启..."
-      sudo tee "$SERVICE_FILE" > /dev/null <<UNIT
+    sudo tee "$SERVICE_FILE" > /dev/null <<UNIT
 [Unit]
 Description=OMPS CLI Server
 After=network.target docker.service
@@ -568,16 +546,36 @@ Environment=PORT=9100
 [Install]
 WantedBy=multi-user.target
 UNIT
-      sudo systemctl daemon-reload
-      sudo systemctl enable omps-cli-server
-      pkill -f "cli-server/cli-server" 2>/dev/null || true
-      sudo systemctl start omps-cli-server
-      ok "CLI Server 已配置为 systemd 服务（开机自启）"
+    sudo systemctl daemon-reload
+    sudo systemctl enable omps-cli-server >/dev/null 2>&1
+    sudo systemctl restart omps-cli-server
+    sleep 2
+    if systemctl is-active omps-cli-server >/dev/null 2>&1; then
+      ok "CLI Server 已启动（systemd 服务）"
     else
-      sudo systemctl restart omps-cli-server
-      ok "CLI Server systemd 服务已重启"
+      warn "CLI Server 启动失败，查看: journalctl -u omps-cli-server"
+    fi
+  else
+    # macOS: 用 nohup
+    cd "$SCRIPT_DIR/cli-server"
+    nohup ./cli-server > cli-server.log 2>&1 &
+    CLI_PID=$!
+    cd "$SCRIPT_DIR"
+    sleep 2
+    if kill -0 $CLI_PID 2>/dev/null; then
+      ok "CLI Server 已启动 (PID: $CLI_PID, 端口 9100)"
+    else
+      warn "CLI Server 启动失败，查看日志: cli-server/cli-server.log"
     fi
   fi
+else
+  warn "CLI Server 二进制不存在，跳过启动"
+fi
+
+# ── 开机自启（Linux Docker）──
+
+if [[ "$OS" == "Linux" ]] && command -v systemctl &>/dev/null; then
+  sudo systemctl enable docker 2>/dev/null && info "Docker 已设置开机自启"
 fi
 
 # ── 创建初始账号 ──
