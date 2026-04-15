@@ -45,7 +45,7 @@ fail()  { echo -e "   ${RED}✗${NC} $1"; echo -e "   ${DIM}日志: $LOG_FILE${N
 run_quiet() {
   local desc="$1"; shift
   > "$LOG_FILE"
-  if "$@" >>"$LOG_FILE" 2>&1; then
+  if "$@" >>"$LOG_FILE" 2>&1 </dev/null; then
     return 0
   else
     local code=$?
@@ -61,7 +61,7 @@ run_quiet() {
 run_spin() {
   local desc="$1"; shift
   > "$LOG_FILE"
-  "$@" >>"$LOG_FILE" 2>&1 &
+  "$@" >>"$LOG_FILE" 2>&1 </dev/null &
   local pid=$!
   local chars='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
   local i=0
@@ -250,7 +250,7 @@ else
 fi
 
 # 检查是否能连接 GitHub
-if ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+if ssh -T git@github.com </dev/null 2>&1 | grep -q "successfully authenticated"; then
   ok "GitHub SSH 连接正常"
 else
   echo ""
@@ -269,7 +269,7 @@ else
 
   while true; do
     read -rp "$(echo -e "   ${BLUE}▸${NC} 已添加？按回车验证...")" _
-    if ssh -T git@github.com 2>&1 | grep -q "successfully authenticated"; then
+    if ssh -T git@github.com </dev/null 2>&1 | grep -q "successfully authenticated"; then
       ok "GitHub SSH 连接成功"
       break
     else
@@ -356,8 +356,8 @@ else
   esac
 fi
 
-docker compose version &>/dev/null || fail "Docker Compose 未安装，请升级 Docker"
-ok "Docker Compose $(docker compose version --short)"
+docker compose version </dev/null &>/dev/null || fail "Docker Compose 未安装，请升级 Docker"
+ok "Docker Compose $(docker compose version --short </dev/null)"
 
 # ── 4. WireGuard ──
 
