@@ -17,7 +17,7 @@ BLUE='\033[0;34m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-WORKSPACE_REPO="git@github.com:oh-my-porjects/oh-my-porjects-workspace.git"
+WORKSPACE_REPO="git@github.com:oh-my-porjects/omps-dev-workspace.git"
 WORKSPACE_DIR="omps-platform"
 
 TOTAL_STEPS=10
