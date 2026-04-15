@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.15.1"
+SCRIPT_VERSION="2026.04.15.2"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -280,34 +280,6 @@ else
   done
 fi
 
-# ── 2. 克隆 Workspace ──
-
-step "克隆 Workspace"
-
-# 判断是否已在 workspace 目录中
-if [[ -f "docker-compose.yml" && -d "admin-server" ]]; then
-  ok "已在 workspace 目录中，跳过克隆"
-  SCRIPT_DIR="$(pwd)"
-else
-  if [[ -d "$WORKSPACE_DIR" ]]; then
-    ok "$WORKSPACE_DIR/ 已存在"
-    cd "$WORKSPACE_DIR"
-  else
-    run_spin "克隆仓库..." git clone --recursive "$WORKSPACE_REPO" "$WORKSPACE_DIR"
-    cd "$WORKSPACE_DIR"
-    ok "Workspace 克隆完成"
-  fi
-  SCRIPT_DIR="$(pwd)"
-fi
-
-# 拉取子仓库
-cd "$SCRIPT_DIR"
-if [[ -f "pull.sh" ]]; then
-  info "拉取子仓库..."
-  bash pull.sh
-  ok "子仓库就绪"
-fi
-
 # ── 3. Docker ──
 
 step "检查 Docker"
@@ -368,6 +340,34 @@ fi
 
 docker compose version </dev/null &>/dev/null || fail "Docker Compose 未安装，请升级 Docker"
 ok "Docker Compose $(docker compose version --short </dev/null)"
+
+# ── 4. 克隆 Workspace ──
+
+step "克隆 Workspace"
+
+# 判断是否已在 workspace 目录中
+if [[ -f "docker-compose.yml" && -d "admin-server" ]]; then
+  ok "已在 workspace 目录中，跳过克隆"
+  SCRIPT_DIR="$(pwd)"
+else
+  if [[ -d "$WORKSPACE_DIR" ]]; then
+    ok "$WORKSPACE_DIR/ 已存在"
+    cd "$WORKSPACE_DIR"
+  else
+    run_spin "克隆仓库..." git clone --recursive "$WORKSPACE_REPO" "$WORKSPACE_DIR"
+    cd "$WORKSPACE_DIR"
+    ok "Workspace 克隆完成"
+  fi
+  SCRIPT_DIR="$(pwd)"
+fi
+
+# 拉取子仓库
+cd "$SCRIPT_DIR"
+if [[ -f "pull.sh" ]]; then
+  info "拉取子仓库..."
+  bash pull.sh
+  ok "子仓库就绪"
+fi
 
 # ── 4. WireGuard ──
 
