@@ -581,7 +581,7 @@ if [[ -f "$ENV_FILE" ]] && grep -q "API_PREFIX=" "$ENV_FILE"; then
   API_PREFIX=$(grep "API_PREFIX=" "$ENV_FILE" | cut -d= -f2)
   ok "API 前缀: /$API_PREFIX"
 else
-  API_PREFIX=$(head -c 6 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 8)
+  API_PREFIX=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]')
   echo "API_PREFIX=$API_PREFIX" >> "$ENV_FILE"
   ok "已生成 API 前缀: /$API_PREFIX"
 fi
