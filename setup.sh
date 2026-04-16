@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.15.12"
+SCRIPT_VERSION="2026.04.15.13"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -596,12 +596,8 @@ fi
 step "部署 Admin 平台"
 cd "$SCRIPT_DIR"
 
-# 检查镜像是否已存在，首次构建用 --no-cache，后续用缓存
-if docker images omps-platform-server --format '{{.ID}}' 2>/dev/null | head -1 | grep -q .; then
-  run_spin "构建 Admin Server..." docker compose build server
-else
-  run_spin "构建 Admin Server（首次，无缓存）..." docker compose build --no-cache server
-fi
+SERVER_HASH=$(git -C admin-server rev-parse --short HEAD 2>/dev/null || echo "latest")
+run_spin "构建 Admin Server ($SERVER_HASH)..." docker compose build --build-arg CACHE_BUST="$SERVER_HASH" server
 if [[ "$WEB_MODE" == "local" ]]; then
   run_quiet "启动容器（含 web）" docker compose --profile with-web up -d
 else
