@@ -292,12 +292,12 @@ if [[ "$OS" == "Linux" ]]; then
 
   add_firewall_rules() {
     ufw allow "$SSH_PORT/tcp" comment 'SSH' >/dev/null 2>&1
-    ufw allow "${GATEWAY_PORT:-8080}/tcp" comment 'Nginx Gateway' >/dev/null 2>&1
+    ufw allow "80/tcp" comment 'Nginx Gateway' >/dev/null 2>&1
     ufw allow from 172.16.0.0/12 to any port 9100 proto tcp comment 'CLI Server (Docker internal)' >/dev/null 2>&1
     # 确保 8181 不对外开放
     ufw delete allow 8181/tcp >/dev/null 2>&1
     info "放行 $SSH_PORT/tcp (SSH)"
-    info "放行 ${GATEWAY_PORT:-8080}/tcp (Nginx Gateway)"
+    info "放行 80/tcp (Nginx Gateway)"
     info "放行 9100/tcp (CLI Server，仅 Docker 内部)"
   }
 
@@ -581,20 +581,9 @@ if [[ -f "$ENV_FILE" ]] && grep -q "API_PREFIX=" "$ENV_FILE"; then
   API_PREFIX=$(grep "API_PREFIX=" "$ENV_FILE" | cut -d= -f2)
   ok "API 前缀: /$API_PREFIX"
 else
-  API_PREFIX=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]')
+  API_PREFIX=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]' | cut -d- -f1)
   echo "API_PREFIX=$API_PREFIX" >> "$ENV_FILE"
   ok "已生成 API 前缀: /$API_PREFIX"
-fi
-
-# 读取或配置 Gateway 端口
-GATEWAY_PORT=""
-if [[ -f "$ENV_FILE" ]] && grep -q "GATEWAY_PORT=" "$ENV_FILE"; then
-  GATEWAY_PORT=$(grep "GATEWAY_PORT=" "$ENV_FILE" | cut -d= -f2)
-  ok "Gateway 端口: $GATEWAY_PORT"
-else
-  GATEWAY_PORT=8080
-  echo "GATEWAY_PORT=$GATEWAY_PORT" >> "$ENV_FILE"
-  ok "Gateway 端口: $GATEWAY_PORT（如需修改可编辑 .env）"
 fi
 
 # 生成 nginx 配置
@@ -639,7 +628,7 @@ fi
 
 info "等待 Admin Server 就绪..."
 for i in $(seq 1 30); do
-  HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:${GATEWAY_PORT}/$API_PREFIX/api/dashboard" -H "Authorization: Bearer test" 2>/dev/null || echo "000")
+  HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:80/$API_PREFIX/api/dashboard" -H "Authorization: Bearer test" 2>/dev/null || echo "000")
   if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "200" ]]; then break; fi
   sleep 2
 done
@@ -729,13 +718,13 @@ TEMP_PASS=""
 ENTRY_PATH=""
 
 for i in $(seq 1 15); do
-  if curl -sf "http://localhost:${GATEWAY_PORT}/$API_PREFIX/api/dashboard" >/dev/null 2>&1 || curl -sf "http://localhost:${GATEWAY_PORT}/$API_PREFIX/api/auth/me" >/dev/null 2>&1; then
+  if curl -sf "http://localhost:80/$API_PREFIX/api/dashboard" >/dev/null 2>&1 || curl -sf "http://localhost:80/$API_PREFIX/api/auth/me" >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
 
-TEMP_RESULT=$(curl -sf -X POST "http://localhost:${GATEWAY_PORT}/$API_PREFIX/api/auth/create-temp-account" -H "Content-Type: application/json" 2>/dev/null)
+TEMP_RESULT=$(curl -sf -X POST "http://localhost:80/$API_PREFIX/api/auth/create-temp-account" -H "Content-Type: application/json" 2>/dev/null)
 if [[ $? -eq 0 && -n "$TEMP_RESULT" ]]; then
   TEMP_USER=$(echo "$TEMP_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('username',''))" 2>/dev/null)
   TEMP_PASS=$(echo "$TEMP_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('password',''))" 2>/dev/null)
@@ -771,13 +760,13 @@ else
 fi
 echo ""
 echo -e "   API 前缀  ${BOLD}/${API_PREFIX}${NC}"
-echo -e "   API 地址  ${BLUE}http://服务器IP:${GATEWAY_PORT}/${API_PREFIX}/api/${NC}"
+echo -e "   API 地址  ${BLUE}http://服务器IP/${API_PREFIX}/api/${NC}"
 if [[ "$WEB_MODE" == "local" ]]; then
   echo -e "   Web       ${BLUE}http://localhost:3000${NC}"
 else
-  echo -e "   Web       ${DIM}独立部署，VITE_API_BASE=http://服务器IP:${GATEWAY_PORT}/${API_PREFIX}${NC}"
+  echo -e "   Web       ${DIM}独立部署，VITE_API_BASE=http://服务器IP/${API_PREFIX}${NC}"
 fi
-echo -e "   Gateway   ${BLUE}:${GATEWAY_PORT}${NC} (Nginx)"
+echo -e "   Gateway   ${BLUE}:80${NC} (Nginx)"
 echo -e "   CLI       ${DIM}:9100 (仅内部访问)${NC}"
 echo ""
 echo "   服务状态:"
