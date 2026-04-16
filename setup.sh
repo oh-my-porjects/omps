@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.16"
+SCRIPT_VERSION="2026.04.16.1"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -651,7 +651,7 @@ Type=simple
 User=$USER
 WorkingDirectory=$SCRIPT_DIR/cli-server
 ExecStart=$SCRIPT_DIR/cli-server/cli-server
-Restart=on-failure
+Restart=always
 RestartSec=5
 Environment=CLI_SERVER_TOKEN=dev-cli-token-2026
 Environment=PORT=9100
