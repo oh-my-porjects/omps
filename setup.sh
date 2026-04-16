@@ -596,8 +596,8 @@ else
 fi
 
 # 生成 nginx 配置
-mkdir -p /omps/nginx
-sed "s/\${API_PREFIX}/$API_PREFIX/g" "$SCRIPT_DIR/nginx/default.conf.template" > /omps/nginx/default.conf
+mkdir -p /omps/admin-service/nginx
+sed "s/\${API_PREFIX}/$API_PREFIX/g" "$SCRIPT_DIR/nginx/default.conf.template" > /omps/admin-service/nginx/default.conf
 ok "Nginx 配置已生成"
 
 # 部署模式
