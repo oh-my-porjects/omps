@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.15.7"
+SCRIPT_VERSION="2026.04.15.8"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -23,7 +23,7 @@ NC='\033[0m'
 WORKSPACE_REPO="git@github.com:oh-my-porjects/omps-dev-workspace.git"
 WORKSPACE_DIR="omps-platform"
 
-TOTAL_STEPS=11
+TOTAL_STEPS=12
 MODE="install"
 if [[ "$1" == "update" ]]; then
   MODE="update"
@@ -485,13 +485,46 @@ else
   ok "Codex CLI 安装完成"
 fi
 
-# ── 8. Admin 平台 ──
+# ── 8. 部署模式选择 ──
+
+step "配置部署模式"
+cd "$SCRIPT_DIR"
+
+DEPLOY_CONFIG="$SCRIPT_DIR/.deploy-mode"
+WEB_MODE="local"
+
+if [[ -f "$DEPLOY_CONFIG" ]]; then
+  WEB_MODE=$(cat "$DEPLOY_CONFIG")
+  ok "已有配置: admin-web $( [[ "$WEB_MODE" == "external" ]] && echo '独立部署' || echo '本机部署' )"
+else
+  echo ""
+  echo -e "   admin-web 前端部署方式："
+  echo -e "   ${BOLD}1${NC}) 本机部署（Docker 容器，默认）"
+  echo -e "   ${BOLD}2${NC}) 独立部署（Cloudflare Pages 等，不启动 web 容器）"
+  read -rp "$(echo -e "   ${BLUE}▸${NC} 选择 [1]: ")" WEB_CHOICE
+  WEB_CHOICE="${WEB_CHOICE:-1}"
+
+  if [[ "$WEB_CHOICE" == "2" ]]; then
+    WEB_MODE="external"
+    ok "admin-web 独立部署，跳过 web 容器"
+  else
+    WEB_MODE="local"
+    ok "admin-web 本机部署"
+  fi
+  echo "$WEB_MODE" > "$DEPLOY_CONFIG"
+fi
+
+# ── 9. Admin 平台 ──
 
 step "部署 Admin 平台"
 cd "$SCRIPT_DIR"
 
 run_spin "构建 Admin Server..." docker compose build --no-cache server
-run_quiet "启动容器" docker compose up -d
+if [[ "$WEB_MODE" == "local" ]]; then
+  run_quiet "启动容器（含 web）" docker compose --profile with-web up -d
+else
+  run_quiet "启动容器（无 web）" docker compose up -d
+fi
 
 info "等待 Admin Server 就绪..."
 for i in $(seq 1 30); do
