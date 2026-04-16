@@ -575,13 +575,22 @@ DEPLOY_CONFIG="$SCRIPT_DIR/.deploy-mode"
 ENV_FILE="$SCRIPT_DIR/.env"
 WEB_MODE="local"
 API_PREFIX=""
+ADMIN_DOMAIN=""
 
-# 读取或生成 API 前缀
+# 读取或生成 API 前缀（8 位短 UUID）
 if [[ -f "$ENV_FILE" ]] && grep -q "API_PREFIX=" "$ENV_FILE"; then
   API_PREFIX=$(grep "API_PREFIX=" "$ENV_FILE" | cut -d= -f2)
-  ok "API 前缀: /$API_PREFIX"
+  # 如果是旧的长 UUID，自动截短
+  if [[ ${#API_PREFIX} -gt 8 ]]; then
+    API_PREFIX=${API_PREFIX:0:8}
+    sed -i "s/^API_PREFIX=.*/API_PREFIX=$API_PREFIX/" "$ENV_FILE"
+    ok "API 前缀已截短: /$API_PREFIX"
+  else
+    ok "API 前缀: /$API_PREFIX"
+  fi
 else
-  API_PREFIX=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]' | cut -d- -f1)
+  FULL_UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]')
+  API_PREFIX=${FULL_UUID:0:8}
   echo "API_PREFIX=$API_PREFIX" >> "$ENV_FILE"
   ok "已生成 API 前缀: /$API_PREFIX"
 fi
@@ -594,13 +603,23 @@ ok "Nginx 配置已生成"
 # 部署模式
 if [[ -f "$DEPLOY_CONFIG" ]]; then
   WEB_MODE=$(cat "$DEPLOY_CONFIG")
-  ok "已有配置: admin-web $( [[ "$WEB_MODE" == "external" ]] && echo '独立部署' || echo '本机部署' )"
+  if [[ "$WEB_MODE" == "external" ]] && grep -q "ADMIN_DOMAIN=" "$ENV_FILE" 2>/dev/null; then
+    ADMIN_DOMAIN=$(grep "ADMIN_DOMAIN=" "$ENV_FILE" | cut -d= -f2)
+  fi
+  ok "已有配置: admin-web $( [[ "$WEB_MODE" == "external" ]] && echo "独立部署 ($ADMIN_DOMAIN)" || echo '本机部署' )"
 else
   echo ""
   select_option "   admin-web 前端部署方式：" "本机部署（Docker 容器）" "独立部署（Cloudflare Pages 等）"
   if [[ $SELECTED -eq 1 ]]; then
     WEB_MODE="external"
-    ok "admin-web 独立部署，跳过 web 容器"
+    echo ""
+    echo -n "   请输入指向本服务器的域名（如 api.example.com）: "
+    read -r ADMIN_DOMAIN
+    if [[ -z "$ADMIN_DOMAIN" ]]; then
+      fail "域名不能为空，外部部署必须配置域名"
+    fi
+    echo "ADMIN_DOMAIN=$ADMIN_DOMAIN" >> "$ENV_FILE"
+    ok "admin-web 独立部署，API 域名: $ADMIN_DOMAIN"
   else
     WEB_MODE="local"
     # 本机部署需要放行 3000 端口
@@ -760,11 +779,15 @@ else
 fi
 echo ""
 echo -e "   API 前缀  ${BOLD}/${API_PREFIX}${NC}"
-echo -e "   API 地址  ${BLUE}http://服务器IP/${API_PREFIX}/api/${NC}"
+if [[ -n "$ADMIN_DOMAIN" ]]; then
+  echo -e "   API 地址  ${BLUE}http://${ADMIN_DOMAIN}/${API_PREFIX}/api/${NC}"
+else
+  echo -e "   API 地址  ${BLUE}http://服务器IP/${API_PREFIX}/api/${NC}"
+fi
 if [[ "$WEB_MODE" == "local" ]]; then
   echo -e "   Web       ${BLUE}http://localhost:3000${NC}"
 else
-  echo -e "   Web       ${DIM}独立部署，VITE_API_BASE=http://服务器IP/${API_PREFIX}${NC}"
+  echo -e "   Web       ${DIM}独立部署，VITE_API_BASE=http://${ADMIN_DOMAIN}/${API_PREFIX}${NC}"
 fi
 echo -e "   Gateway   ${BLUE}:80${NC} (Nginx)"
 echo -e "   CLI       ${DIM}:9100 (仅内部访问)${NC}"
