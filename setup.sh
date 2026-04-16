@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.15.14"
+SCRIPT_VERSION="2026.04.16"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -293,8 +293,10 @@ if [[ "$OS" == "Linux" ]]; then
   add_firewall_rules() {
     ufw allow "$SSH_PORT/tcp" comment 'SSH' >/dev/null 2>&1
     ufw allow 8181/tcp comment 'Admin Server API' >/dev/null 2>&1
+    ufw allow from 172.16.0.0/12 to any port 9100 proto tcp comment 'CLI Server (Docker internal)' >/dev/null 2>&1
     info "放行 $SSH_PORT/tcp (SSH)"
     info "放行 8181/tcp (Admin Server API)"
+    info "放行 9100/tcp (CLI Server，仅 Docker 内部)"
   }
 
   if ufw status 2>/dev/null | grep -q "Status: active"; then
