@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.15.9"
+SCRIPT_VERSION="2026.04.15.10"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -23,7 +23,7 @@ NC='\033[0m'
 WORKSPACE_REPO="git@github.com:oh-my-porjects/omps-dev-workspace.git"
 WORKSPACE_DIR="omps-platform"
 
-TOTAL_STEPS=12
+TOTAL_STEPS=13
 MODE="install"
 if [[ "$1" == "update" ]]; then
   MODE="update"
@@ -275,7 +275,41 @@ else
   CURRENT_STEP=$((CURRENT_STEP + 1))
 fi
 
-# ── 2. SSH Key ──
+# ── 2. 防火墙（仅 Linux）──
+
+if [[ "$OS" == "Linux" ]]; then
+  step "配置防火墙"
+
+  # 确定当前 SSH 端口
+  SSH_PORT="${NEW_PORT:-$CURRENT_PORT}"
+  SSH_PORT="${SSH_PORT:-22}"
+
+  if ! command -v ufw &>/dev/null; then
+    info "安装 ufw..."
+    run_quiet "安装 ufw" apt-get update -qq
+    run_quiet "安装 ufw" apt-get install -y ufw
+  fi
+
+  if ufw status 2>/dev/null | grep -q "Status: active"; then
+    # 防火墙已启用，确保端口放行
+    ufw allow "$SSH_PORT/tcp" >/dev/null 2>&1
+    ufw allow 8181/tcp >/dev/null 2>&1
+    ok "防火墙已启用，SSH($SSH_PORT) 和 API(8181) 已放行"
+  else
+    # 未启用，先加规则再启用
+    info "配置防火墙规则..."
+    ufw default deny incoming >/dev/null 2>&1
+    ufw default allow outgoing >/dev/null 2>&1
+    ufw allow "$SSH_PORT/tcp" >/dev/null 2>&1
+    ufw allow 8181/tcp >/dev/null 2>&1
+    yes | ufw enable >/dev/null 2>&1
+    ok "防火墙已启用，放行 SSH($SSH_PORT) + API(8181)"
+  fi
+else
+  CURRENT_STEP=$((CURRENT_STEP + 1))
+fi
+
+# ── 3. SSH Key ──
 
 step "检查 SSH Key"
 
@@ -544,7 +578,11 @@ else
     ok "admin-web 独立部署，跳过 web 容器"
   else
     WEB_MODE="local"
-    ok "admin-web 本机部署"
+    # 本机部署需要放行 3000 端口
+    if [[ "$OS" == "Linux" ]] && command -v ufw &>/dev/null; then
+      ufw allow 3000/tcp >/dev/null 2>&1
+    fi
+    ok "admin-web 本机部署（端口 3000 已放行）"
   fi
   echo "$WEB_MODE" > "$DEPLOY_CONFIG"
 fi
