@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.15.10"
+SCRIPT_VERSION="2026.04.15.11"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -290,20 +290,23 @@ if [[ "$OS" == "Linux" ]]; then
     run_quiet "安装 ufw" apt-get install -y ufw
   fi
 
+  add_firewall_rules() {
+    ufw allow "$SSH_PORT/tcp" comment 'SSH' >/dev/null 2>&1
+    ufw allow 8181/tcp comment 'Admin Server API' >/dev/null 2>&1
+    info "放行 $SSH_PORT/tcp (SSH)"
+    info "放行 8181/tcp (Admin Server API)"
+  }
+
   if ufw status 2>/dev/null | grep -q "Status: active"; then
-    # 防火墙已启用，确保端口放行
-    ufw allow "$SSH_PORT/tcp" >/dev/null 2>&1
-    ufw allow 8181/tcp >/dev/null 2>&1
-    ok "防火墙已启用，SSH($SSH_PORT) 和 API(8181) 已放行"
+    add_firewall_rules
+    ok "防火墙已启用，规则已更新"
   else
-    # 未启用，先加规则再启用
-    info "配置防火墙规则..."
+    info "启用防火墙..."
     ufw default deny incoming >/dev/null 2>&1
     ufw default allow outgoing >/dev/null 2>&1
-    ufw allow "$SSH_PORT/tcp" >/dev/null 2>&1
-    ufw allow 8181/tcp >/dev/null 2>&1
+    add_firewall_rules
     yes | ufw enable >/dev/null 2>&1
-    ok "防火墙已启用，放行 SSH($SSH_PORT) + API(8181)"
+    ok "防火墙已启用"
   fi
 else
   CURRENT_STEP=$((CURRENT_STEP + 1))
@@ -580,9 +583,10 @@ else
     WEB_MODE="local"
     # 本机部署需要放行 3000 端口
     if [[ "$OS" == "Linux" ]] && command -v ufw &>/dev/null; then
-      ufw allow 3000/tcp >/dev/null 2>&1
+      ufw allow 3000/tcp comment 'Admin Web' >/dev/null 2>&1
+      info "放行 3000/tcp (Admin Web)"
     fi
-    ok "admin-web 本机部署（端口 3000 已放行）"
+    ok "admin-web 本机部署"
   fi
   echo "$WEB_MODE" > "$DEPLOY_CONFIG"
 fi
