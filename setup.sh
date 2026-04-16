@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.15.13"
+SCRIPT_VERSION="2026.04.15.14"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -720,7 +720,11 @@ if [[ -n "$TEMP_USER" && -n "$ENTRY_PATH" ]]; then
   echo -e "   ${YELLOW}┌──────────────────────────────────────┐${NC}"
   echo -e "   ${YELLOW}│  请保存以下信息（仅显示一次）       │${NC}"
   echo -e "   ${YELLOW}├──────────────────────────────────────┤${NC}"
-  echo -e "   ${YELLOW}│${NC} 入口  ${BLUE}http://localhost:3000/${ENTRY_PATH}${NC}"
+  if [[ "$WEB_MODE" == "local" ]]; then
+    echo -e "   ${YELLOW}│${NC} 入口  ${BLUE}http://localhost:3000/${ENTRY_PATH}${NC}"
+  else
+    echo -e "   ${YELLOW}│${NC} 入口  ${DIM}请在独立部署的前端访问 /${ENTRY_PATH}${NC}"
+  fi
   echo -e "   ${YELLOW}│${NC} 账号  ${BOLD}${TEMP_USER}${NC}"
   echo -e "   ${YELLOW}│${NC} 密码  ${BOLD}${TEMP_PASS}${NC}"
   echo -e "   ${YELLOW}├──────────────────────────────────────┤${NC}"
@@ -728,11 +732,20 @@ if [[ -n "$TEMP_USER" && -n "$ENTRY_PATH" ]]; then
   echo -e "   ${YELLOW}│${NC} 需安装 Google Authenticator 等应用"
   echo -e "   ${YELLOW}└──────────────────────────────────────┘${NC}"
 else
-  echo -e "   管理后台  ${BLUE}http://localhost:3000${NC}"
+  if [[ "$WEB_MODE" == "local" ]]; then
+    echo -e "   管理后台  ${BLUE}http://localhost:3000${NC}"
+  else
+    echo -e "   管理后台  ${DIM}独立部署，构建时设置 VITE_API_BASE=http://服务器IP:8181${NC}"
+  fi
 fi
 echo ""
 echo -e "   API       ${BLUE}http://localhost:8181${NC}"
 echo -e "   CLI       ${BLUE}http://localhost:9100${NC}"
+if [[ "$WEB_MODE" == "local" ]]; then
+  echo -e "   Web       ${BLUE}http://localhost:3000${NC}"
+else
+  echo -e "   Web       ${DIM}独立部署（Cloudflare Pages 等）${NC}"
+fi
 echo ""
 echo "   服务状态:"
 docker ps --filter "label=com.docker.compose.project=omps-platform" --format "   ✓ {{.Names}}  {{.Status}}" 2>/dev/null || true
