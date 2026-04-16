@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.16.1"
+SCRIPT_VERSION="2026.04.16.2"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -292,10 +292,12 @@ if [[ "$OS" == "Linux" ]]; then
 
   add_firewall_rules() {
     ufw allow "$SSH_PORT/tcp" comment 'SSH' >/dev/null 2>&1
-    ufw allow 8181/tcp comment 'Admin Server API' >/dev/null 2>&1
+    ufw allow 80/tcp comment 'Nginx Gateway' >/dev/null 2>&1
     ufw allow from 172.16.0.0/12 to any port 9100 proto tcp comment 'CLI Server (Docker internal)' >/dev/null 2>&1
+    # 确保 8181 不对外开放
+    ufw delete allow 8181/tcp >/dev/null 2>&1
     info "放行 $SSH_PORT/tcp (SSH)"
-    info "放行 8181/tcp (Admin Server API)"
+    info "放行 80/tcp (Nginx Gateway)"
     info "放行 9100/tcp (CLI Server，仅 Docker 内部)"
   }
 
@@ -564,14 +566,32 @@ else
   ok "Codex CLI 安装完成"
 fi
 
-# ── 8. 部署模式选择 ──
+# ── 8. 部署模式选择 + API 前缀 ──
 
 step "配置部署模式"
 cd "$SCRIPT_DIR"
 
 DEPLOY_CONFIG="$SCRIPT_DIR/.deploy-mode"
+ENV_FILE="$SCRIPT_DIR/.env"
 WEB_MODE="local"
+API_PREFIX=""
 
+# 读取或生成 API 前缀
+if [[ -f "$ENV_FILE" ]] && grep -q "API_PREFIX=" "$ENV_FILE"; then
+  API_PREFIX=$(grep "API_PREFIX=" "$ENV_FILE" | cut -d= -f2)
+  ok "API 前缀: /$API_PREFIX"
+else
+  API_PREFIX=$(head -c 6 /dev/urandom | base64 | tr -dc 'a-z0-9' | head -c 8)
+  echo "API_PREFIX=$API_PREFIX" >> "$ENV_FILE"
+  ok "已生成 API 前缀: /$API_PREFIX"
+fi
+
+# 生成 nginx 配置
+mkdir -p /omps/nginx
+sed "s/\${API_PREFIX}/$API_PREFIX/g" "$SCRIPT_DIR/nginx/default.conf.template" > /omps/nginx/default.conf
+ok "Nginx 配置已生成"
+
+# 部署模式
 if [[ -f "$DEPLOY_CONFIG" ]]; then
   WEB_MODE=$(cat "$DEPLOY_CONFIG")
   ok "已有配置: admin-web $( [[ "$WEB_MODE" == "external" ]] && echo '独立部署' || echo '本机部署' )"
@@ -608,7 +628,7 @@ fi
 
 info "等待 Admin Server 就绪..."
 for i in $(seq 1 30); do
-  HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8181/api/dashboard -H "Authorization: Bearer test" 2>/dev/null || echo "000")
+  HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:80/$API_PREFIX/api/dashboard" -H "Authorization: Bearer test" 2>/dev/null || echo "000")
   if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "200" ]]; then break; fi
   sleep 2
 done
@@ -698,13 +718,13 @@ TEMP_PASS=""
 ENTRY_PATH=""
 
 for i in $(seq 1 15); do
-  if curl -sf http://localhost:8181/api/dashboard >/dev/null 2>&1 || curl -sf http://localhost:8181/api/auth/me >/dev/null 2>&1; then
+  if curl -sf "http://localhost:80/$API_PREFIX/api/dashboard" >/dev/null 2>&1 || curl -sf "http://localhost:80/$API_PREFIX/api/auth/me" >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
 
-TEMP_RESULT=$(curl -sf -X POST http://localhost:8181/api/auth/create-temp-account -H "Content-Type: application/json" 2>/dev/null)
+TEMP_RESULT=$(curl -sf -X POST "http://localhost:80/$API_PREFIX/api/auth/create-temp-account" -H "Content-Type: application/json" 2>/dev/null)
 if [[ $? -eq 0 && -n "$TEMP_RESULT" ]]; then
   TEMP_USER=$(echo "$TEMP_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('username',''))" 2>/dev/null)
   TEMP_PASS=$(echo "$TEMP_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('password',''))" 2>/dev/null)
@@ -736,18 +756,18 @@ if [[ -n "$TEMP_USER" && -n "$ENTRY_PATH" ]]; then
 else
   if [[ "$WEB_MODE" == "local" ]]; then
     echo -e "   管理后台  ${BLUE}http://localhost:3000${NC}"
-  else
-    echo -e "   管理后台  ${DIM}独立部署，构建时设置 VITE_API_BASE=http://服务器IP:8181${NC}"
   fi
 fi
 echo ""
-echo -e "   API       ${BLUE}http://localhost:8181${NC}"
-echo -e "   CLI       ${BLUE}http://localhost:9100${NC}"
+echo -e "   API 前缀  ${BOLD}/${API_PREFIX}${NC}"
+echo -e "   API 地址  ${BLUE}http://服务器IP/${API_PREFIX}/api/${NC}"
 if [[ "$WEB_MODE" == "local" ]]; then
   echo -e "   Web       ${BLUE}http://localhost:3000${NC}"
 else
-  echo -e "   Web       ${DIM}独立部署（Cloudflare Pages 等）${NC}"
+  echo -e "   Web       ${DIM}独立部署，VITE_API_BASE=http://服务器IP/${API_PREFIX}${NC}"
 fi
+echo -e "   Gateway   ${BLUE}:80${NC} (Nginx)"
+echo -e "   CLI       ${DIM}:9100 (仅内部访问)${NC}"
 echo ""
 echo "   服务状态:"
 docker ps --filter "label=com.docker.compose.project=omps-platform" --format "   ✓ {{.Names}}  {{.Status}}" 2>/dev/null || true
