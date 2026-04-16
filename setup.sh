@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.15.8"
+SCRIPT_VERSION="2026.04.15.9"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -40,6 +40,46 @@ step() {
 }
 info()  { echo -e "   ${BLUE}▸${NC} $1"; }
 ok()    { echo -e "   ${GREEN}✓${NC} $1"; }
+
+# 方向键选择函数
+# 用法: select_option "提示" "选项1" "选项2"
+# 结果存在 SELECTED（0=第一项）
+select_option() {
+  local prompt="$1"; shift
+  local options=("$@")
+  local count=${#options[@]}
+  local current=0
+  tput civis 2>/dev/null
+  draw_menu() {
+    for i in "${!options[@]}"; do
+      tput el 2>/dev/null
+      if [[ $i -eq $current ]]; then
+        echo -e "     ${BLUE}>${NC} ${BOLD}${options[$i]}${NC}"
+      else
+        echo -e "       ${DIM}${options[$i]}${NC}"
+      fi
+    done
+  }
+  echo -e "$prompt"
+  draw_menu
+  while true; do
+    IFS= read -rsn1 key
+    case "$key" in
+      $'\x1b')
+        read -rsn2 rest
+        case "$rest" in
+          '[A') [[ $current -gt 0 ]] && current=$((current - 1)) || true ;;
+          '[B') [[ $current -lt $((count - 1)) ]] && current=$((current + 1)) || true ;;
+        esac
+        ;;
+      '') break ;;
+    esac
+    for ((i = 0; i < count; i++)); do tput cuu1 2>/dev/null; done
+    draw_menu
+  done
+  tput cnorm 2>/dev/null
+  SELECTED=$current
+}
 warn()  { echo -e "   ${YELLOW}!${NC} $1"; }
 fail()  { echo -e "   ${RED}✗${NC} $1"; echo -e "   ${DIM}日志: $LOG_FILE${NC}"; exit 1; }
 
@@ -498,13 +538,8 @@ if [[ -f "$DEPLOY_CONFIG" ]]; then
   ok "已有配置: admin-web $( [[ "$WEB_MODE" == "external" ]] && echo '独立部署' || echo '本机部署' )"
 else
   echo ""
-  echo -e "   admin-web 前端部署方式："
-  echo -e "   ${BOLD}1${NC}) 本机部署（Docker 容器，默认）"
-  echo -e "   ${BOLD}2${NC}) 独立部署（Cloudflare Pages 等，不启动 web 容器）"
-  read -rp "$(echo -e "   ${BLUE}▸${NC} 选择 [1]: ")" WEB_CHOICE
-  WEB_CHOICE="${WEB_CHOICE:-1}"
-
-  if [[ "$WEB_CHOICE" == "2" ]]; then
+  select_option "   admin-web 前端部署方式：" "本机部署（Docker 容器）" "独立部署（Cloudflare Pages 等）"
+  if [[ $SELECTED -eq 1 ]]; then
     WEB_MODE="external"
     ok "admin-web 独立部署，跳过 web 容器"
   else
