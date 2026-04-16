@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.16.2"
+SCRIPT_VERSION="2026.04.16.3"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -159,10 +159,10 @@ if [[ "$MODE" == "update" ]]; then
     fi
   done
 
-  step "重建 Admin Server"
+  step "更新 Admin Server"
   cd "$SCRIPT_DIR"
-  run_spin "构建镜像..." docker compose build --no-cache server
-  ok "Admin Server 构建完成"
+  run_spin "拉取镜像..." docker compose pull server
+  ok "Admin Server 镜像已更新"
 
   step "重启 Admin 平台"
   run_quiet "重启容器" docker compose up -d --force-recreate
@@ -637,8 +637,7 @@ fi
 step "部署 Admin 平台"
 cd "$SCRIPT_DIR"
 
-SERVER_HASH=$(git -C admin-server rev-parse --short HEAD 2>/dev/null || echo "latest")
-run_spin "构建 Admin Server ($SERVER_HASH)..." docker compose build --build-arg CACHE_BUST="$SERVER_HASH" server
+run_spin "拉取 Admin Server 镜像..." docker compose pull server
 if [[ "$WEB_MODE" == "local" ]]; then
   run_quiet "启动容器（含 web）" docker compose --profile with-web up -d
 else
