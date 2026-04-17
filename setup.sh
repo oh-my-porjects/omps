@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.16.3"
+SCRIPT_VERSION="2026.04.16.4"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -252,7 +252,7 @@ if [[ "$OS" == "Linux" ]]; then
 
   if [[ "$CURRENT_PORT" == "22" ]]; then
     warn "当前 SSH 端口为 22，建议修改以提高安全性"
-    read -rp "$(echo -e "   ${BLUE}▸${NC} 输入新端口（默认 19822）: ")" NEW_PORT
+    read -rep "$(echo -e "   ${BLUE}▸${NC} 输入新端口（默认 19822）: ")" NEW_PORT
     NEW_PORT="${NEW_PORT:-19822}"
 
     # 校验端口号
@@ -628,8 +628,7 @@ else
   if [[ $SELECTED -eq 1 ]]; then
     WEB_MODE="external"
     echo ""
-    echo -n "   请输入指向本服务器的域名（如 api.example.com）: "
-    read -r ADMIN_DOMAIN
+    read -rep "   请输入指向本服务器的域名（如 api.example.com）: " ADMIN_DOMAIN
     if [[ -z "$ADMIN_DOMAIN" ]]; then
       fail "域名不能为空，外部部署必须配置域名"
     fi
