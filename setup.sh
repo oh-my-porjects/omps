@@ -180,6 +180,13 @@ if [[ "$MODE" == "update" ]]; then
   BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
   export BUILD_COMMIT="$SERVER_HASH" BUILD_TIME CACHE_BUST="$SERVER_HASH"
   run_spin "构建镜像 ($SERVER_HASH)..." docker compose build --no-cache server
+  # 验证镜像内 VERSION 与源码 HEAD 一致（防御 Docker cache 异常）
+  if [[ "$SERVER_HASH" != "unknown" ]]; then
+    IMAGE_VERSION=$(docker run --rm omps-platform-server cat /app/VERSION 2>/dev/null | tr -d '\r\n')
+    if [[ "$IMAGE_VERSION" != "$SERVER_HASH" ]]; then
+      fail "镜像版本校验失败（预期 $SERVER_HASH，实际 '$IMAGE_VERSION'），可能命中旧 cache"
+    fi
+  fi
   ok "Admin Server 构建完成"
 
   step "重启 Admin 平台"
@@ -657,7 +664,15 @@ cd "$SCRIPT_DIR"
 SERVER_HASH=$(git -C admin-server rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 export BUILD_COMMIT="$SERVER_HASH" BUILD_TIME CACHE_BUST="$SERVER_HASH"
-run_spin "构建 Admin Server ($SERVER_HASH)..." docker compose build server
+run_spin "构建 Admin Server ($SERVER_HASH)..." docker compose build --no-cache server
+# 验证镜像内 VERSION 与源码 HEAD 一致（防御 Docker cache 异常）
+if [[ "$SERVER_HASH" != "unknown" ]]; then
+  IMAGE_VERSION=$(docker run --rm omps-platform-server cat /app/VERSION 2>/dev/null | tr -d '\r\n')
+  if [[ "$IMAGE_VERSION" != "$SERVER_HASH" ]]; then
+    fail "镜像版本校验失败（预期 $SERVER_HASH，实际 '$IMAGE_VERSION'），可能命中旧 cache"
+  fi
+  ok "镜像版本校验通过 ($IMAGE_VERSION)"
+fi
 if [[ "$WEB_MODE" == "local" ]]; then
   run_quiet "启动容器（含 web）" docker compose --profile with-web up -d
 else
