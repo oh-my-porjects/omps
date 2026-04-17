@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.16.6"
+SCRIPT_VERSION="2026.04.17.1"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -269,6 +269,23 @@ if [[ "$OS" == "Linux" ]]; then
     if ! [[ "$NEW_PORT" =~ ^[0-9]+$ ]] || [[ "$NEW_PORT" -lt 1024 || "$NEW_PORT" -gt 65535 ]]; then
       fail "端口号无效（需要 1024-65535）"
     fi
+
+    # 提示云服务商安全组
+    echo ""
+    echo -e "   ${YELLOW}┌──────────────────────────────────────────────────┐${NC}"
+    echo -e "   ${YELLOW}│  ⚠ 云服务商安全组也要放行（否则会失联）          │${NC}"
+    echo -e "   ${YELLOW}└──────────────────────────────────────────────────┘${NC}"
+    echo ""
+    echo -e "   阿里云 / 腾讯云 / AWS / 华为云等都有独立的「安全组」"
+    echo -e "   （云端防火墙），与服务器本地 ufw 是两层，必须都放行。"
+    echo ""
+    echo -e "   请登录云控制台 → 实例 → ${BOLD}安全组${NC} → 入方向，放行 TCP："
+    echo -e "     ${BOLD}${NEW_PORT}${NC}   SSH 新端口（改完后 22 端口即失效）"
+    echo -e "     ${BOLD}80${NC}     Nginx Gateway（前端回源用，未放行会报 522）"
+    echo ""
+    echo -e "   ${DIM}未放行会导致 sshd 重启后直接失联，只能走控制台 VNC 救援。${NC}"
+    echo ""
+    read -rp "$(echo -e "   ${BLUE}▸${NC} 已在云安全组放行 ${BOLD}${NEW_PORT}${NC} 和 ${BOLD}80${NC}？按回车继续（Ctrl+C 取消）")" _
 
     # 修改 sshd 配置
     if grep -qE "^Port " "$SSHD_CONFIG"; then
@@ -644,6 +661,7 @@ else
     fi
     echo "ADMIN_DOMAIN=$ADMIN_DOMAIN" >> "$ENV_FILE"
     ok "admin-web 独立部署，API 域名: $ADMIN_DOMAIN"
+    warn "记得云服务商安全组已放行 ${BOLD}80/tcp${NC}，否则 Cloudflare 回源会报 522"
   else
     WEB_MODE="local"
     # 本机部署需要放行 3000 端口
