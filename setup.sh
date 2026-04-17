@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e
 
-SCRIPT_VERSION="2026.04.16.2"
+SCRIPT_VERSION="2026.04.16.3"
 
 # Oh My Projects 平台一键部署脚本
 # 用法:
@@ -33,10 +33,25 @@ fi
 CURRENT_STEP=0
 LOG_FILE=$(mktemp /tmp/omps-setup-XXXXXX.log)
 
+STEP_START=0
 step() {
+  # 上一步耗时
+  if [[ $STEP_START -gt 0 ]]; then
+    local elapsed=$(( $(date +%s) - STEP_START ))
+    echo -e "   ${DIM}耗时 ${elapsed}s${NC}"
+  fi
   CURRENT_STEP=$((CURRENT_STEP + 1))
+  STEP_START=$(date +%s)
   echo ""
   echo -e "${BOLD}── [$CURRENT_STEP/$TOTAL_STEPS] $1 ──────────────────────────${NC}"
+}
+# 最后一步结束时调用
+step_done() {
+  if [[ $STEP_START -gt 0 ]]; then
+    local elapsed=$(( $(date +%s) - STEP_START ))
+    echo -e "   ${DIM}耗时 ${elapsed}s${NC}"
+    STEP_START=0
+  fi
 }
 info()  { echo -e "   ${BLUE}▸${NC} $1"; }
 ok()    { echo -e "   ${GREEN}✓${NC} $1"; }
@@ -749,6 +764,8 @@ if [[ $? -eq 0 && -n "$TEMP_RESULT" ]]; then
   TEMP_PASS=$(echo "$TEMP_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('password',''))" 2>/dev/null)
   ENTRY_PATH=$(echo "$TEMP_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('entry_path',''))" 2>/dev/null)
 fi
+
+step_done
 
 # ── 摘要 ──
 
