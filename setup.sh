@@ -164,7 +164,7 @@ if [[ "$MODE" == "update" ]]; then
     ok "主仓库已更新"
   fi
 
-  for dir in admin-server admin-web runtime cli-server project-admin-web project-template module-template; do
+  for dir in admin-server admin-web runtime cli-server omps-mcp project-admin-web project-template module-template; do
     if [[ -d "$dir/.git" ]]; then
       cd "$SCRIPT_DIR/$dir"
       run_quiet "拉取 $dir" git fetch --all
@@ -208,6 +208,17 @@ if [[ "$MODE" == "update" ]]; then
     ok "CLI Server 构建完成"
   else
     warn "cli-server/ 目录不存在，跳过"
+  fi
+
+  step "重建 omps-mcp"
+  if [[ -d "$SCRIPT_DIR/omps-mcp" ]]; then
+    GO_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+    GO_ARCH=$( [[ "$ARCH" == "arm64" ]] && echo arm64 || echo amd64 )
+    run_spin "编译 omps-mcp 二进制..." docker run --rm -v "$SCRIPT_DIR/omps-mcp:/app" -w /app golang:1.26 \
+      sh -c "CGO_ENABLED=0 GOOS=$GO_OS GOARCH=$GO_ARCH go build -o omps-mcp ./cmd/omps-mcp"
+    ok "omps-mcp 构建完成（stdio 工具，由 Claude CLI 按需 spawn）"
+  else
+    warn "omps-mcp/ 目录不存在，跳过"
   fi
 
   step "重启 CLI Server"
@@ -718,6 +729,20 @@ if [[ -d "$SCRIPT_DIR/cli-server" ]]; then
   ok "CLI Server 构建完成"
 else
   warn "cli-server/ 目录不存在，跳过"
+fi
+
+# ── 9.5 omps-mcp 构建（stdio 工具，无需启动）──
+
+step "构建 omps-mcp"
+
+if [[ -d "$SCRIPT_DIR/omps-mcp" ]]; then
+  GO_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+  GO_ARCH=$( [[ "$ARCH" == "arm64" ]] && echo arm64 || echo amd64 )
+  run_spin "编译 omps-mcp 二进制..." docker run --rm -v "$SCRIPT_DIR/omps-mcp:/app" -w /app golang:1.26 \
+    sh -c "CGO_ENABLED=0 GOOS=$GO_OS GOARCH=$GO_ARCH go build -o omps-mcp ./cmd/omps-mcp"
+  ok "omps-mcp 构建完成（stdio 工具，Claude CLI 按需 spawn）"
+else
+  warn "omps-mcp/ 目录不存在，跳过"
 fi
 
 # ── 10. CLI Server 启动 ──
