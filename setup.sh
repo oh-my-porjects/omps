@@ -164,6 +164,17 @@ if [[ "$MODE" == "update" ]]; then
     ok "主仓库已更新"
   fi
 
+  # dir → GitHub 仓库名映射（新增子仓库只需在这里加一行，已有/新增都会被处理）
+  declare -A SETUP_REPO_MAP=(
+    [admin-server]=omps-admin-server
+    [admin-web]=omps-admin-web
+    [runtime]=omps-runtime
+    [cli-server]=omps-cli-server
+    [omps-mcp]=omps-mcp
+    [project-admin-web]=omps-project-admin-web
+    [project-template]=omps-project-template
+    [module-template]=omps-module-template
+  )
   for dir in admin-server admin-web runtime cli-server omps-mcp project-admin-web project-template module-template; do
     if [[ -d "$dir/.git" ]]; then
       cd "$SCRIPT_DIR/$dir"
@@ -171,6 +182,13 @@ if [[ "$MODE" == "update" ]]; then
       run_quiet "重置 $dir" git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
       cd "$SCRIPT_DIR"
       ok "$dir 已更新"
+    else
+      # 目录不存在：自动 clone（处理"新增子仓库、已安装的老环境没有"的场景）
+      repo="${SETUP_REPO_MAP[$dir]}"
+      if [[ -n "$repo" ]]; then
+        run_quiet "克隆 $dir" git clone "git@github.com:oh-my-porjects/${repo}.git" "$dir"
+        ok "$dir 新增并已克隆"
+      fi
     fi
   done
 
