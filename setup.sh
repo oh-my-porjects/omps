@@ -159,9 +159,20 @@ if [[ "$MODE" == "update" ]]; then
   cd "$SCRIPT_DIR"
 
   if [[ -d .git ]]; then
+    OLD_WS=$(git rev-parse HEAD 2>/dev/null || echo "")
     run_quiet "更新主仓库" git fetch --all
     run_quiet "重置主仓库" git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
+    NEW_WS=$(git rev-parse HEAD 2>/dev/null || echo "")
     ok "主仓库已更新"
+    # ⚠ 关键：如果 setup.sh 在 workspace 根里（常见部署方式），workspace reset
+    # 会替换当前正在执行的 setup.sh 文件。bash 是边读边执行，继续跑会字节错位
+    # 读到新脚本的内容，诡异崩溃或静默跳过后续流程。
+    # OMPS_SETUP_RELOADED 守卫避免无限递归
+    if [[ "$OLD_WS" != "$NEW_WS" && -z "$OMPS_SETUP_RELOADED" ]]; then
+      ok "检测到脚本自身有更新，重新加载最新版本..."
+      export OMPS_SETUP_RELOADED=1
+      exec bash "$0" "$@"
+    fi
   fi
 
   # dir → GitHub 仓库名映射（新增子仓库只需在这里加一行，已有/新增都会被处理）
