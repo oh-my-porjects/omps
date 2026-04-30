@@ -787,6 +787,21 @@ if [[ -f "docker-compose.monitor.yml" ]]; then
   sudo chown -R 472:472 /omps/monitor/grafana 2>/dev/null || true
   sudo chown -R 65534:65534 /omps/monitor/alertmanager 2>/dev/null || true
 
+  # 探测 wg0 接口：admin-server 一般是 mesh 里的 10.0.0.1
+  # 只有 host 上确实有这个 IP 时才绑定，否则 docker 启动会因找不到接口失败
+  ENV_FILE_MON="$SCRIPT_DIR/.env"
+  touch "$ENV_FILE_MON"
+  # 移除可能存在的旧值（幂等）
+  sed -i.bak '/^MONITOR_VM_BIND=/d' "$ENV_FILE_MON" 2>/dev/null || true
+  rm -f "$ENV_FILE_MON.bak" 2>/dev/null || true
+  if ip -4 addr show wg0 2>/dev/null | grep -q "inet 10.0.0.1/"; then
+    echo "MONITOR_VM_BIND=10.0.0.1" >> "$ENV_FILE_MON"
+    info "VM 写入端口绑定 WG IP 10.0.0.1:8428（节点端 vmagent 走 WG 推送）"
+  else
+    echo "MONITOR_VM_BIND=127.0.0.1" >> "$ENV_FILE_MON"
+    info "VM 写入端口仅本机 127.0.0.1:8428（未检测到 wg0=10.0.0.1）"
+  fi
+
   run_quiet "拉镜像" docker compose -f docker-compose.monitor.yml pull
   run_quiet "启动监控栈" docker compose -f docker-compose.monitor.yml up -d
 
