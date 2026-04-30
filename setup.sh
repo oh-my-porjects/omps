@@ -23,11 +23,11 @@ NC='\033[0m'
 WORKSPACE_REPO="git@github.com:oh-my-porjects/omps-dev-workspace.git"
 WORKSPACE_DIR="omps-platform"
 
-TOTAL_STEPS=14
+TOTAL_STEPS=15
 MODE="install"
 if [[ "$1" == "update" ]]; then
   MODE="update"
-  TOTAL_STEPS=5
+  TOTAL_STEPS=6
 fi
 
 CURRENT_STEP=0
@@ -772,6 +772,36 @@ if [[ -d "$SCRIPT_DIR/omps-mcp" ]]; then
   ok "omps-mcp 构建完成（stdio 工具，Claude CLI 按需 spawn）"
 else
   warn "omps-mcp/ 目录不存在，跳过"
+fi
+
+# ── 9.7 监控栈 ──
+
+step "启动监控栈"
+
+cd "$SCRIPT_DIR"
+if [[ -f "docker-compose.monitor.yml" ]]; then
+  # 数据目录
+  sudo mkdir -p /omps/monitor/vm /omps/monitor/vmagent /omps/monitor/grafana /omps/monitor/alertmanager 2>/dev/null \
+    || mkdir -p /omps/monitor/vm /omps/monitor/vmagent /omps/monitor/grafana /omps/monitor/alertmanager 2>/dev/null
+  # cadvisor 容器需要 root 操作 sysfs；grafana / alertmanager 容器 uid 472 / 65534 需要写权限
+  sudo chown -R 472:472 /omps/monitor/grafana 2>/dev/null || true
+  sudo chown -R 65534:65534 /omps/monitor/alertmanager 2>/dev/null || true
+
+  run_quiet "拉镜像" docker compose -f docker-compose.monitor.yml pull
+  run_quiet "启动监控栈" docker compose -f docker-compose.monitor.yml up -d
+
+  info "等待 VictoriaMetrics 就绪..."
+  for i in $(seq 1 30); do
+    if docker exec omps-monitor-vm wget -qO- http://localhost:8428/health >/dev/null 2>&1; then break; fi
+    sleep 2
+  done
+  if docker exec omps-monitor-vm wget -qO- http://localhost:8428/health >/dev/null 2>&1; then
+    ok "监控栈已启动（VictoriaMetrics + Grafana + Alertmanager + Exporter）"
+  else
+    warn "VictoriaMetrics 就绪超时，查看: docker logs omps-monitor-vm"
+  fi
+else
+  warn "docker-compose.monitor.yml 不存在，跳过监控栈"
 fi
 
 # ── 10. CLI Server 启动 ──
