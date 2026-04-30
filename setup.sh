@@ -1002,22 +1002,28 @@ else
 fi
 echo -e "   ${BLUE}└──────────────────────────────────────────────────┘${NC}"
 
-# 外部部署：Cloudflare Pages 环境变量配置指引
+# 外部部署：admin-web GitHub Actions 配置指引
+#
+# 实际流程：push → GitHub Actions 用 secret VITE_API_BASE 跑 npm run build
+# → wrangler 把 dist 上传到 Cloudflare Pages（CF 端不 build）
+# 所以环境变量要设在 GitHub 仓库的 secrets，不是 CF Dashboard
 if [[ "$WEB_MODE" == "external" ]]; then
   echo ""
-  echo -e "   ${YELLOW}┌────────────────────────────────────────────┐${NC}"
-  echo -e "   ${YELLOW}│  admin-web 部署到 Cloudflare Pages         │${NC}"
-  echo -e "   ${YELLOW}├────────────────────────────────────────────┤${NC}"
-  echo -e "   ${YELLOW}│${NC} Cloudflare Dashboard → Workers & Pages →"
-  echo -e "   ${YELLOW}│${NC} 选 admin-web 项目 → Settings →"
-  echo -e "   ${YELLOW}│${NC} Variables and Secrets → Add (Production)"
+  echo -e "   ${YELLOW}┌──────────────────────────────────────────────────┐${NC}"
+  echo -e "   ${YELLOW}│  admin-web 部署配置（GitHub Actions 跑 build）   │${NC}"
+  echo -e "   ${YELLOW}├──────────────────────────────────────────────────┤${NC}"
+  echo -e "   ${YELLOW}│${NC} GitHub admin-web 仓库 → Settings →"
+  echo -e "   ${YELLOW}│${NC} Secrets and variables → Actions → New secret"
   echo -e "   ${YELLOW}│${NC}"
-  echo -e "   ${YELLOW}│${NC}   Variable name:  ${BOLD}VITE_API_BASE${NC}"
-  echo -e "   ${YELLOW}│${NC}   Value:          ${BOLD}https://${ADMIN_DOMAIN}/${API_PREFIX}${NC}"
+  echo -e "   ${YELLOW}│${NC}   Name:   ${BOLD}VITE_API_BASE${NC}"
+  echo -e "   ${YELLOW}│${NC}   Value:  ${BOLD}https://${ADMIN_DOMAIN}/${API_PREFIX}${NC}"
   echo -e "   ${YELLOW}│${NC}"
-  echo -e "   ${YELLOW}│${NC} 加完后回到 Deployments → Retry deployment"
-  echo -e "   ${YELLOW}│${NC} 才会生效（Vite 构建时把变量打进静态资源）"
-  echo -e "   ${YELLOW}└────────────────────────────────────────────┘${NC}"
+  echo -e "   ${YELLOW}│${NC} 加完后让 workflow 重跑一次："
+  echo -e "   ${YELLOW}│${NC}  - 推任意 commit 触发，或"
+  echo -e "   ${YELLOW}│${NC}  - Actions 页 Deploy workflow 点 Run workflow"
+  echo -e "   ${YELLOW}│${NC}"
+  echo -e "   ${YELLOW}│${NC} ${DIM}Cloudflare Dashboard 上的环境变量不生效，CF 只接静态产物${NC}"
+  echo -e "   ${YELLOW}└──────────────────────────────────────────────────┘${NC}"
 fi
 
 # 平台入口信息：admin-web 上的安全入口（/:entryPath 验证后才显示登录页）
