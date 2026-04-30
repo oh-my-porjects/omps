@@ -680,11 +680,26 @@ cd "$SCRIPT_DIR"
 DEPLOY_CONFIG="$SCRIPT_DIR/.deploy-mode"
 ENV_FILE="$SCRIPT_DIR/.env"
 WEB_MODE="local"
-API_PREFIX=""
 ADMIN_DOMAIN=""
 
 # 读取或生成 API 前缀（8 位短 UUID）
-if [[ -f "$ENV_FILE" ]] && grep -q "API_PREFIX=" "$ENV_FILE"; then
+#
+# 优先级：环境变量 > .env 文件 > 自动生成
+# 重装服务器时通过环境变量传入旧值即可保持 prefix 不变，避免重新配 GH secret：
+#   API_PREFIX=719e44d5 ADMIN_DOMAIN=xxx bash setup.sh
+PREFIX_FROM_ENV="${API_PREFIX:-}"
+API_PREFIX=""
+
+if [[ -n "$PREFIX_FROM_ENV" ]]; then
+  # 环境变量优先：覆盖 .env 里可能的旧值，确保跨重装稳定
+  API_PREFIX="${PREFIX_FROM_ENV:0:8}"
+  if [[ -f "$ENV_FILE" ]] && grep -q "API_PREFIX=" "$ENV_FILE"; then
+    sed -i "s/^API_PREFIX=.*/API_PREFIX=$API_PREFIX/" "$ENV_FILE"
+  else
+    echo "API_PREFIX=$API_PREFIX" >> "$ENV_FILE"
+  fi
+  ok "API 前缀（来自环境变量）: /$API_PREFIX"
+elif [[ -f "$ENV_FILE" ]] && grep -q "API_PREFIX=" "$ENV_FILE"; then
   API_PREFIX=$(grep "API_PREFIX=" "$ENV_FILE" | cut -d= -f2)
   # 如果是旧的长 UUID，自动截短
   if [[ ${#API_PREFIX} -gt 8 ]]; then
@@ -707,7 +722,23 @@ sed "s/\${API_PREFIX}/$API_PREFIX/g" "$SCRIPT_DIR/nginx/default.conf.template" >
 ok "Nginx 配置已生成"
 
 # 部署模式
-if [[ -f "$DEPLOY_CONFIG" ]]; then
+# 优先级：环境变量 ADMIN_DOMAIN > .deploy-mode + .env > 交互式选择
+# 重装时通过环境变量一行命令直接还原：
+#   API_PREFIX=xxx ADMIN_DOMAIN=xxx bash setup.sh
+DOMAIN_FROM_ENV="${ADMIN_DOMAIN:-}"
+ADMIN_DOMAIN=""
+
+if [[ -n "$DOMAIN_FROM_ENV" ]]; then
+  WEB_MODE="external"
+  ADMIN_DOMAIN="$DOMAIN_FROM_ENV"
+  echo "external" > "$DEPLOY_CONFIG"
+  if grep -q "ADMIN_DOMAIN=" "$ENV_FILE" 2>/dev/null; then
+    sed -i "s|^ADMIN_DOMAIN=.*|ADMIN_DOMAIN=$ADMIN_DOMAIN|" "$ENV_FILE"
+  else
+    echo "ADMIN_DOMAIN=$ADMIN_DOMAIN" >> "$ENV_FILE"
+  fi
+  ok "ADMIN_DOMAIN（来自环境变量）: $ADMIN_DOMAIN"
+elif [[ -f "$DEPLOY_CONFIG" ]]; then
   WEB_MODE=$(cat "$DEPLOY_CONFIG")
   if [[ "$WEB_MODE" == "external" ]] && grep -q "ADMIN_DOMAIN=" "$ENV_FILE" 2>/dev/null; then
     ADMIN_DOMAIN=$(grep "ADMIN_DOMAIN=" "$ENV_FILE" | cut -d= -f2)
@@ -1041,6 +1072,19 @@ if [[ -n "$TEMP_USER" && -n "$ENTRY_PATH" ]]; then
   echo -e "   ${YELLOW}│${NC} 临时账号  ${BOLD}${TEMP_USER}${NC}"
   echo -e "   ${YELLOW}│${NC} 临时密码  ${BOLD}${TEMP_PASS}${NC}"
   echo -e "   ${YELLOW}└──────────────────────────────────────┘${NC}"
+fi
+
+# 重装服务器一键还原命令（保持 prefix 跟 GitHub secret 一致，避免重新 build admin-web）
+if [[ "$WEB_MODE" == "external" ]]; then
+  echo ""
+  echo -e "   ${GREEN}┌──────────────────────────────────────────────────────┐${NC}"
+  echo -e "   ${GREEN}│  重装服务器一键命令（保存这条，prefix 跨重装稳定）   │${NC}"
+  echo -e "   ${GREEN}├──────────────────────────────────────────────────────┤${NC}"
+  echo -e "   ${GREEN}│${NC} curl -O https://raw.githubusercontent.com/oh-my-porjects/omps/main/setup.sh && \\"
+  echo -e "   ${GREEN}│${NC} API_PREFIX=${BOLD}${API_PREFIX}${NC} ADMIN_DOMAIN=${BOLD}${ADMIN_DOMAIN}${NC} bash setup.sh"
+  echo -e "   ${GREEN}│${NC}"
+  echo -e "   ${GREEN}│${NC} ${DIM}用此命令重装：跳过所有交互，prefix 不变，admin-web 无需重 build${NC}"
+  echo -e "   ${GREEN}└──────────────────────────────────────────────────────┘${NC}"
 fi
 
 echo ""
