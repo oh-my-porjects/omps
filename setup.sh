@@ -658,7 +658,6 @@ ENV_FILE="$SCRIPT_DIR/.env"
 WEB_MODE="local"
 API_PREFIX=""
 ADMIN_DOMAIN=""
-ADMIN_WEB_DOMAIN=""
 
 # 读取或生成 API 前缀（8 位短 UUID）
 if [[ -f "$ENV_FILE" ]] && grep -q "API_PREFIX=" "$ENV_FILE"; then
@@ -686,9 +685,8 @@ ok "Nginx 配置已生成"
 # 部署模式
 if [[ -f "$DEPLOY_CONFIG" ]]; then
   WEB_MODE=$(cat "$DEPLOY_CONFIG")
-  if [[ "$WEB_MODE" == "external" ]]; then
-    grep -q "ADMIN_DOMAIN=" "$ENV_FILE" 2>/dev/null && ADMIN_DOMAIN=$(grep "ADMIN_DOMAIN=" "$ENV_FILE" | cut -d= -f2)
-    grep -q "ADMIN_WEB_DOMAIN=" "$ENV_FILE" 2>/dev/null && ADMIN_WEB_DOMAIN=$(grep "ADMIN_WEB_DOMAIN=" "$ENV_FILE" | cut -d= -f2)
+  if [[ "$WEB_MODE" == "external" ]] && grep -q "ADMIN_DOMAIN=" "$ENV_FILE" 2>/dev/null; then
+    ADMIN_DOMAIN=$(grep "ADMIN_DOMAIN=" "$ENV_FILE" | cut -d= -f2)
   fi
   ok "已有配置: admin-web $( [[ "$WEB_MODE" == "external" ]] && echo "独立部署 ($ADMIN_DOMAIN)" || echo '本机部署' )"
 else
@@ -702,13 +700,6 @@ else
       fail "API 域名不能为空，外部部署必须配置域名"
     fi
     echo "ADMIN_DOMAIN=$ADMIN_DOMAIN" >> "$ENV_FILE"
-
-    # admin-web 访问地址（可选；用户可能还没部署，或用 pages.dev 默认子域）
-    read -rep "   admin-web 部署后的访问地址（如 admin.example.com / xxx.pages.dev，可选回车跳过）: " ADMIN_WEB_DOMAIN
-    if [[ -n "$ADMIN_WEB_DOMAIN" ]]; then
-      echo "ADMIN_WEB_DOMAIN=$ADMIN_WEB_DOMAIN" >> "$ENV_FILE"
-    fi
-
     ok "admin-web 独立部署，API 域名: $ADMIN_DOMAIN"
     warn "记得云服务商安全组已放行 ${BOLD}80/tcp${NC}，否则 Cloudflare 回源会报 522"
   else
@@ -888,11 +879,6 @@ if [[ "$WEB_MODE" == "local" ]]; then
   echo -e "   ${BLUE}│${NC} 前端地址   ${BOLD}http://localhost:3000${NC}"
 else
   echo -e "   ${BLUE}│${NC} API 入口   ${BOLD}https://${ADMIN_DOMAIN}/${API_PREFIX}${NC}"
-  if [[ -n "$ADMIN_WEB_DOMAIN" ]]; then
-    echo -e "   ${BLUE}│${NC} 前端地址   ${BOLD}https://${ADMIN_WEB_DOMAIN}${NC}"
-  else
-    echo -e "   ${BLUE}│${NC} 前端地址   ${DIM}admin-web 部署完成后访问 Pages 地址${NC}"
-  fi
 fi
 echo -e "   ${BLUE}└──────────────────────────────────────┘${NC}"
 
@@ -922,8 +908,6 @@ if [[ -n "$TEMP_USER" && -n "$ENTRY_PATH" ]]; then
   echo -e "   ${YELLOW}├──────────────────────────────────────┤${NC}"
   if [[ "$WEB_MODE" == "local" ]]; then
     echo -e "   ${YELLOW}│${NC} 登录入口  ${BOLD}http://localhost:3000/${ENTRY_PATH}${NC}"
-  elif [[ -n "$ADMIN_WEB_DOMAIN" ]]; then
-    echo -e "   ${YELLOW}│${NC} 登录入口  ${BOLD}https://${ADMIN_WEB_DOMAIN}/${ENTRY_PATH}${NC}"
   else
     echo -e "   ${YELLOW}│${NC} 入口路径  ${BOLD}/${ENTRY_PATH}${NC}"
     echo -e "   ${YELLOW}│${NC} ${DIM}（拼到 admin-web 部署域名后访问）${NC}"
