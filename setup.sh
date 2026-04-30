@@ -445,6 +445,30 @@ fi
 
 # ── 3. Docker ──
 
+# ── 4.5 Swap（只在内存紧张时创建，避免 OOM kill docker-buildx）──
+#
+# 实测 3.8GB 内存 0 swap 的机器跑 admin-server build 时 docker-buildx 被
+# OOM kill（go test + go build 并发编译峰值高）。监控栈 + 主业务 runtime
+# 加起来本身就要 1.5GB+，build 期间叠加临时 1GB+ 直接爆。
+# 自动创建 2GB swap 兜底，让构建期峰值有去处。
+if [[ "$OS" == "Linux" ]]; then
+  TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+  TOTAL_MEM_GB=$((TOTAL_MEM_KB / 1024 / 1024))
+  SWAP_SIZE_KB=$(grep SwapTotal /proc/meminfo | awk '{print $2}')
+  if [[ $TOTAL_MEM_GB -lt 6 && $SWAP_SIZE_KB -eq 0 ]]; then
+    info "内存 ${TOTAL_MEM_GB}GB 且无 swap，创建 2GB swap 防止 build OOM..."
+    if [[ ! -f /swapfile ]]; then
+      run_quiet "分配 swap 文件 (2GB)" sudo fallocate -l 2G /swapfile || \
+        sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+      sudo chmod 600 /swapfile
+      sudo mkswap /swapfile >/dev/null 2>&1
+    fi
+    sudo swapon /swapfile 2>/dev/null && \
+      grep -q "^/swapfile" /etc/fstab || echo "/swapfile none swap sw 0 0" | sudo tee -a /etc/fstab >/dev/null
+    ok "Swap 已启用：$(free -h | awk '/Swap:/ {print $2}')"
+  fi
+fi
+
 step "检查 Docker"
 
 install_docker_mac() {
