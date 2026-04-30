@@ -780,9 +780,18 @@ step "启动监控栈"
 
 cd "$SCRIPT_DIR"
 if [[ -f "docker-compose.monitor.yml" ]]; then
+  # 拉镜像前预检：images.env 完整性 + sync_monitor.go 一致性
+  # 远程 manifest 校验跳过（避免 docker hub rate limit；正常 pull 会发现 tag 错）
+  if [[ -x "$SCRIPT_DIR/scripts/verify-monitor-images.sh" ]]; then
+    if ! SKIP_REMOTE=1 "$SCRIPT_DIR/scripts/verify-monitor-images.sh" --quiet; then
+      fail "监控镜像校验失败，请按上面错误提示修复 monitor-config/images.env 后重跑"
+    fi
+    info "监控镜像校验通过"
+  fi
+
   # 数据目录
-  sudo mkdir -p /omps/monitor/vm /omps/monitor/vmagent /omps/monitor/grafana /omps/monitor/alertmanager 2>/dev/null \
-    || mkdir -p /omps/monitor/vm /omps/monitor/vmagent /omps/monitor/grafana /omps/monitor/alertmanager 2>/dev/null
+  sudo mkdir -p /omps/monitor/vm /omps/monitor/vmagent /omps/monitor/grafana /omps/monitor/alertmanager /omps/monitor/vl 2>/dev/null \
+    || mkdir -p /omps/monitor/vm /omps/monitor/vmagent /omps/monitor/grafana /omps/monitor/alertmanager /omps/monitor/vl 2>/dev/null
   # cadvisor 容器需要 root 操作 sysfs；grafana / alertmanager 容器 uid 472 / 65534 需要写权限
   sudo chown -R 472:472 /omps/monitor/grafana 2>/dev/null || true
   sudo chown -R 65534:65534 /omps/monitor/alertmanager 2>/dev/null || true
@@ -804,8 +813,11 @@ if [[ -f "docker-compose.monitor.yml" ]]; then
     info "监控写入端口仅本机 127.0.0.1（未检测到 wg0=10.0.0.1）"
   fi
 
-  run_quiet "拉镜像" docker compose -f docker-compose.monitor.yml pull
-  run_quiet "启动监控栈" docker compose -f docker-compose.monitor.yml up -d
+  # 镜像 tag 来自 monitor-config/images.env（单一来源，verify 脚本已校验）
+  # --env-file 同时加载 .env 与 images.env，前者放部署变量后者放镜像版本
+  MON_COMPOSE="docker compose --env-file .env --env-file monitor-config/images.env -f docker-compose.monitor.yml"
+  run_quiet "拉镜像" $MON_COMPOSE pull
+  run_quiet "启动监控栈" $MON_COMPOSE up -d
 
   info "等待 VictoriaMetrics 就绪..."
   for i in $(seq 1 30); do
