@@ -222,7 +222,7 @@ if [[ "$MODE" == "update" ]]; then
   run_quiet "重启容器" docker compose up -d --force-recreate
   info "等待 Admin Server 就绪..."
   for i in $(seq 1 30); do
-    HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8181/api/dashboard -H "Authorization: Bearer test" 2>/dev/null || echo "000")
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8181/api/dashboard -H "Authorization: Bearer test" 2>/dev/null || echo "000")
     if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "200" ]]; then break; fi
     sleep 2
   done
@@ -775,7 +775,7 @@ for i in $(seq 1 90); do
   LAST_RESTARTING=$(docker inspect --format '{{.State.Restarting}}' omps-admin-server 2>/dev/null || echo "true")
   if [[ "$LAST_STATUS" == "running" && "$LAST_RESTARTING" == "false" ]]; then
     # 容器稳定后再 curl 确认 HTTP 接收，401/200 都算就绪
-    HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:80/$API_PREFIX/api/dashboard" -H "Authorization: Bearer test" 2>/dev/null || echo "000")
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:80/$API_PREFIX/api/dashboard" -H "Authorization: Bearer test" 2>/dev/null || echo "000")
     if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "200" ]]; then
       STABLE_COUNT=$((STABLE_COUNT + 1))
       [[ $STABLE_COUNT -ge 5 ]] && { HEALTHY=1; break; }
