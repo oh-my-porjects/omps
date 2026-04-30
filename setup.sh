@@ -738,12 +738,29 @@ else
 fi
 
 info "等待 Admin Server 就绪..."
+HEALTHY=0
 for i in $(seq 1 30); do
   HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:80/$API_PREFIX/api/dashboard" -H "Authorization: Bearer test" 2>/dev/null || echo "000")
-  if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "200" ]]; then break; fi
+  if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "200" ]]; then HEALTHY=1; break; fi
   sleep 2
 done
-ok "Admin 平台已启动"
+# 二次校验：起来过但可能立即又崩进 Restarting，确认 60s 内状态稳定
+if [[ $HEALTHY -eq 1 ]]; then
+  sleep 5
+  CONTAINER_STATUS=$(docker inspect --format '{{.State.Status}}' omps-admin-server 2>/dev/null || echo "unknown")
+  RESTARTING=$(docker inspect --format '{{.State.Restarting}}' omps-admin-server 2>/dev/null || echo "false")
+  if [[ "$CONTAINER_STATUS" != "running" || "$RESTARTING" == "true" ]]; then
+    warn "Admin Server 起来后又崩了（status=$CONTAINER_STATUS restarting=$RESTARTING）"
+    warn "查看日志：${BOLD}docker logs omps-admin-server --tail 100${NC}"
+    warn "常见原因：DB 连接 / panic / 端口冲突"
+    HEALTHY=0
+  fi
+fi
+if [[ $HEALTHY -eq 1 ]]; then
+  ok "Admin 平台已启动"
+else
+  fail "Admin 平台启动失败，请按上方提示查看日志"
+fi
 
 # ── 9. CLI Server 构建 ──
 
@@ -820,14 +837,21 @@ if [[ -f "docker-compose.monitor.yml" ]]; then
   run_quiet "启动监控栈" $MON_COMPOSE up -d
 
   info "等待 VictoriaMetrics 就绪..."
+  # VM 镜像是 scratch（无 wget/curl），所以从 host 上 curl 它 publish 的 127.0.0.1:8428
+  # MONITOR_VM_BIND 默认 127.0.0.1，setup 已写入 .env
+  VM_BIND=$(grep '^MONITOR_VM_BIND=' "$ENV_FILE_MON" 2>/dev/null | cut -d= -f2)
+  VM_BIND=${VM_BIND:-127.0.0.1}
+  VM_READY=0
   for i in $(seq 1 30); do
-    if docker exec omps-monitor-vm wget -qO- http://localhost:8428/health >/dev/null 2>&1; then break; fi
+    if curl -sf -o /dev/null "http://${VM_BIND}:8428/health" 2>/dev/null; then VM_READY=1; break; fi
     sleep 2
   done
-  if docker exec omps-monitor-vm wget -qO- http://localhost:8428/health >/dev/null 2>&1; then
+  if [[ $VM_READY -eq 1 ]]; then
     ok "监控栈已启动（VictoriaMetrics + Grafana + Alertmanager + Exporter）"
   else
-    warn "VictoriaMetrics 就绪超时，查看: docker logs omps-monitor-vm"
+    warn "VictoriaMetrics 就绪超时（${VM_BIND}:8428）"
+    warn "诊断：docker logs omps-monitor-vm --tail 50"
+    warn "      docker ps --filter name=omps-monitor"
   fi
 else
   warn "docker-compose.monitor.yml 不存在，跳过监控栈"
@@ -930,16 +954,19 @@ echo -e "${YELLOW}请保存以下信息（仅显示一次）${NC}"
 
 # 平台访问信息
 echo ""
-echo -e "   ${BLUE}┌──────────────────────────────────────┐${NC}"
-echo -e "   ${BLUE}│  平台访问地址                        │${NC}"
-echo -e "   ${BLUE}├──────────────────────────────────────┤${NC}"
+echo -e "   ${BLUE}┌──────────────────────────────────────────────────┐${NC}"
+echo -e "   ${BLUE}│  平台访问地址                                    │${NC}"
+echo -e "   ${BLUE}├──────────────────────────────────────────────────┤${NC}"
 if [[ "$WEB_MODE" == "local" ]]; then
-  echo -e "   ${BLUE}│${NC} API 前缀   ${BOLD}/${API_PREFIX}${NC}"
-  echo -e "   ${BLUE}│${NC} 前端地址   ${BOLD}http://localhost:3000${NC}"
+  echo -e "   ${BLUE}│${NC} Web 入口    ${BOLD}http://localhost:3000${NC}"
+  echo -e "   ${BLUE}│${NC} API 前缀    ${BOLD}/${API_PREFIX}${NC}"
 else
-  echo -e "   ${BLUE}│${NC} API 入口   ${BOLD}https://${ADMIN_DOMAIN}/${API_PREFIX}${NC}"
+  echo -e "   ${BLUE}│${NC} Web 入口    ${DIM}admin-web 部署到 Cloudflare Pages 后访问${NC}"
+  echo -e "   ${BLUE}│${NC}             ${DIM}（CF 分配的 *.pages.dev 或自定义域名）${NC}"
+  echo -e "   ${BLUE}│${NC} API 地址    ${BOLD}https://${ADMIN_DOMAIN}/${API_PREFIX}${NC}"
+  echo -e "   ${BLUE}│${NC}             ${DIM}（admin-web 通过 VITE_API_BASE 回源此地址）${NC}"
 fi
-echo -e "   ${BLUE}└──────────────────────────────────────┘${NC}"
+echo -e "   ${BLUE}└──────────────────────────────────────────────────┘${NC}"
 
 # 外部部署：Cloudflare Pages 环境变量配置指引
 if [[ "$WEB_MODE" == "external" ]]; then
