@@ -761,40 +761,38 @@ else
   run_quiet "启动容器（无 web）" docker compose up -d
 fi
 
-info "等待 Admin Server 就绪..."
+info "等待 Admin Server 就绪（最多 3 分钟，低内存机器跑 swap 较慢）..."
+# 单一循环：每 2s inspect 容器状态，连续 5 次稳定（10s）即认定 OK
+# - 容器 running + restarting=false：admin-server 进程正常起来了
+# - 容器 restarting=true 或 status=exited：重启循环或崩了
+# 总超时 180s = 90 次 × 2s，足够 build 完 migration + 启动 HTTP 服务
 HEALTHY=0
-for i in $(seq 1 30); do
-  HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:80/$API_PREFIX/api/dashboard" -H "Authorization: Bearer test" 2>/dev/null || echo "000")
-  if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "200" ]]; then HEALTHY=1; break; fi
+STABLE_COUNT=0
+LAST_STATUS="unknown"
+LAST_RESTARTING="true"
+for i in $(seq 1 90); do
+  LAST_STATUS=$(docker inspect --format '{{.State.Status}}' omps-admin-server 2>/dev/null || echo "unknown")
+  LAST_RESTARTING=$(docker inspect --format '{{.State.Restarting}}' omps-admin-server 2>/dev/null || echo "true")
+  if [[ "$LAST_STATUS" == "running" && "$LAST_RESTARTING" == "false" ]]; then
+    # 容器稳定后再 curl 确认 HTTP 接收，401/200 都算就绪
+    HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:80/$API_PREFIX/api/dashboard" -H "Authorization: Bearer test" 2>/dev/null || echo "000")
+    if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "200" ]]; then
+      STABLE_COUNT=$((STABLE_COUNT + 1))
+      [[ $STABLE_COUNT -ge 5 ]] && { HEALTHY=1; break; }
+    else
+      STABLE_COUNT=0
+    fi
+  else
+    STABLE_COUNT=0
+  fi
   sleep 2
 done
-
-# 二次校验：起来后可能 panic 又崩进 Restarting；轮询 15 秒确认状态持续稳定
-# 多次而非单次 docker inspect 避免抓到 docker daemon 信息更新延迟的瞬时态
-if [[ $HEALTHY -eq 1 ]]; then
-  STABLE_COUNT=0
-  for i in $(seq 1 8); do
-    sleep 2
-    STATUS=$(docker inspect --format '{{.State.Status}}' omps-admin-server 2>/dev/null || echo "unknown")
-    RESTARTING=$(docker inspect --format '{{.State.Restarting}}' omps-admin-server 2>/dev/null || echo "true")
-    if [[ "$STATUS" == "running" && "$RESTARTING" == "false" ]]; then
-      STABLE_COUNT=$((STABLE_COUNT + 1))
-      # 连续 3 次稳定（6 秒）即认定就绪，避免抓到 docker daemon 瞬时态
-      [[ $STABLE_COUNT -ge 3 ]] && break
-    else
-      STABLE_COUNT=0  # 任一次不稳重新计数
-    fi
-  done
-  if [[ $STABLE_COUNT -lt 3 ]]; then
-    warn "Admin Server 状态不稳（最后一次 status=$STATUS restarting=$RESTARTING）"
-    warn "查看日志：${BOLD}docker logs omps-admin-server --tail 100${NC}"
-    warn "常见原因：DB migration / panic / 端口冲突"
-    HEALTHY=0
-  fi
-fi
 if [[ $HEALTHY -eq 1 ]]; then
   ok "Admin 平台已启动"
 else
+  warn "Admin Server 未就绪（status=$LAST_STATUS restarting=$LAST_RESTARTING）"
+  warn "查看日志：${BOLD}docker logs omps-admin-server --tail 100${NC}"
+  warn "常见原因：DB migration / panic / 端口冲突 / build OOM"
   fail "Admin 平台启动失败，请按上方提示查看日志"
 fi
 
