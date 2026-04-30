@@ -744,15 +744,27 @@ for i in $(seq 1 30); do
   if [[ "$HTTP_CODE" == "401" || "$HTTP_CODE" == "200" ]]; then HEALTHY=1; break; fi
   sleep 2
 done
-# 二次校验：起来过但可能立即又崩进 Restarting，确认 60s 内状态稳定
+
+# 二次校验：起来后可能 panic 又崩进 Restarting；轮询 15 秒确认状态持续稳定
+# 多次而非单次 docker inspect 避免抓到 docker daemon 信息更新延迟的瞬时态
 if [[ $HEALTHY -eq 1 ]]; then
-  sleep 5
-  CONTAINER_STATUS=$(docker inspect --format '{{.State.Status}}' omps-admin-server 2>/dev/null || echo "unknown")
-  RESTARTING=$(docker inspect --format '{{.State.Restarting}}' omps-admin-server 2>/dev/null || echo "false")
-  if [[ "$CONTAINER_STATUS" != "running" || "$RESTARTING" == "true" ]]; then
-    warn "Admin Server 起来后又崩了（status=$CONTAINER_STATUS restarting=$RESTARTING）"
+  STABLE_COUNT=0
+  for i in $(seq 1 8); do
+    sleep 2
+    STATUS=$(docker inspect --format '{{.State.Status}}' omps-admin-server 2>/dev/null || echo "unknown")
+    RESTARTING=$(docker inspect --format '{{.State.Restarting}}' omps-admin-server 2>/dev/null || echo "true")
+    if [[ "$STATUS" == "running" && "$RESTARTING" == "false" ]]; then
+      STABLE_COUNT=$((STABLE_COUNT + 1))
+      # 连续 3 次稳定（6 秒）即认定就绪，避免抓到 docker daemon 瞬时态
+      [[ $STABLE_COUNT -ge 3 ]] && break
+    else
+      STABLE_COUNT=0  # 任一次不稳重新计数
+    fi
+  done
+  if [[ $STABLE_COUNT -lt 3 ]]; then
+    warn "Admin Server 状态不稳（最后一次 status=$STATUS restarting=$RESTARTING）"
     warn "查看日志：${BOLD}docker logs omps-admin-server --tail 100${NC}"
-    warn "常见原因：DB 连接 / panic / 端口冲突"
+    warn "常见原因：DB migration / panic / 端口冲突"
     HEALTHY=0
   fi
 fi
