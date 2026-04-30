@@ -914,13 +914,20 @@ if [[ "$WEB_MODE" == "external" ]]; then
   echo -e "   ${YELLOW}└────────────────────────────────────────────┘${NC}"
 fi
 
-# 平台入口信息
+# 平台入口信息：admin-web 上的安全入口（/:entryPath 验证后才显示登录页）
 if [[ -n "$TEMP_USER" && -n "$ENTRY_PATH" ]]; then
   echo ""
   echo -e "   ${YELLOW}┌──────────────────────────────────────┐${NC}"
   echo -e "   ${YELLOW}│  平台入口信息                        │${NC}"
   echo -e "   ${YELLOW}├──────────────────────────────────────┤${NC}"
-  echo -e "   ${YELLOW}│${NC} 平台入口  ${BOLD}/${ENTRY_PATH}${NC}"
+  if [[ "$WEB_MODE" == "local" ]]; then
+    echo -e "   ${YELLOW}│${NC} 登录入口  ${BOLD}http://localhost:3000/${ENTRY_PATH}${NC}"
+  elif [[ -n "$ADMIN_WEB_DOMAIN" ]]; then
+    echo -e "   ${YELLOW}│${NC} 登录入口  ${BOLD}https://${ADMIN_WEB_DOMAIN}/${ENTRY_PATH}${NC}"
+  else
+    echo -e "   ${YELLOW}│${NC} 入口路径  ${BOLD}/${ENTRY_PATH}${NC}"
+    echo -e "   ${YELLOW}│${NC} ${DIM}（拼到 admin-web 部署域名后访问）${NC}"
+  fi
   echo -e "   ${YELLOW}│${NC} 临时账号  ${BOLD}${TEMP_USER}${NC}"
   echo -e "   ${YELLOW}│${NC} 临时密码  ${BOLD}${TEMP_PASS}${NC}"
   echo -e "   ${YELLOW}└──────────────────────────────────────┘${NC}"
