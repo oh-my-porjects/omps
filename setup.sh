@@ -792,14 +792,16 @@ if [[ -f "docker-compose.monitor.yml" ]]; then
   ENV_FILE_MON="$SCRIPT_DIR/.env"
   touch "$ENV_FILE_MON"
   # 移除可能存在的旧值（幂等）
-  sed -i.bak '/^MONITOR_VM_BIND=/d' "$ENV_FILE_MON" 2>/dev/null || true
+  sed -i.bak -e '/^MONITOR_VM_BIND=/d' -e '/^MONITOR_VL_BIND=/d' "$ENV_FILE_MON" 2>/dev/null || true
   rm -f "$ENV_FILE_MON.bak" 2>/dev/null || true
   if ip -4 addr show wg0 2>/dev/null | grep -q "inet 10.0.0.1/"; then
     echo "MONITOR_VM_BIND=10.0.0.1" >> "$ENV_FILE_MON"
-    info "VM 写入端口绑定 WG IP 10.0.0.1:8428（节点端 vmagent 走 WG 推送）"
+    echo "MONITOR_VL_BIND=10.0.0.1" >> "$ENV_FILE_MON"
+    info "监控写入端口绑定 WG IP 10.0.0.1（节点端 vmagent + vector 走 WG 推送）"
   else
     echo "MONITOR_VM_BIND=127.0.0.1" >> "$ENV_FILE_MON"
-    info "VM 写入端口仅本机 127.0.0.1:8428（未检测到 wg0=10.0.0.1）"
+    echo "MONITOR_VL_BIND=127.0.0.1" >> "$ENV_FILE_MON"
+    info "监控写入端口仅本机 127.0.0.1（未检测到 wg0=10.0.0.1）"
   fi
 
   run_quiet "拉镜像" docker compose -f docker-compose.monitor.yml pull
