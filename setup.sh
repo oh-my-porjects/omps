@@ -874,12 +874,18 @@ if [[ -f "docker-compose.monitor.yml" ]]; then
   # Beszel 数据目录（PocketBase SQLite + ed25519 公私钥）
   sudo mkdir -p /omps/monitor/beszel 2>/dev/null || mkdir -p /omps/monitor/beszel 2>/dev/null
 
-  # Beszel 默认绑定 host 127.0.0.1（不向公网 publish，外部经 nginx /beszel/ 反代）
   ENV_FILE_MON="$SCRIPT_DIR/.env"
   touch "$ENV_FILE_MON"
+  # 清掉历史 MONITOR_BESZEL_BIND（host network 模式不需要）
   sed -i.bak -e '/^MONITOR_BESZEL_BIND=/d' "$ENV_FILE_MON" 2>/dev/null || true
   rm -f "$ENV_FILE_MON.bak" 2>/dev/null || true
-  echo "MONITOR_BESZEL_BIND=127.0.0.1" >> "$ENV_FILE_MON"
+
+  # Beszel hub 用 host network 监听 8090，需 ufw 阻止公网直接访问
+  # 外部仅能通过 nginx /beszel/ 反代进
+  if [[ "$OS" == "Linux" ]] && command -v ufw &>/dev/null; then
+    sudo ufw deny 8090/tcp 2>/dev/null || true
+    info "ufw 阻止公网访问 8090（Beszel 仅经 nginx 反代）"
+  fi
 
   # Beszel 超级管理员账号（持久化到 .env，setup 摘要输出凭证）
   if ! grep -q '^BESZEL_ADMIN_EMAIL=' "$ENV_FILE_MON" 2>/dev/null; then
