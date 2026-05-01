@@ -916,10 +916,34 @@ if [[ -f "docker-compose.monitor.yml" ]]; then
     sleep 2
   done
   if [[ $BESZEL_READY -eq 1 ]]; then
-    ok "监控栈已启动（Beszel）"
+    ok "Beszel hub 已启动"
   else
     warn "Beszel 就绪超时（127.0.0.1:8090）"
     warn "诊断：docker logs omps-monitor-beszel --tail 50"
+  fi
+
+  # 中心机自监控：等私钥落盘后派生公钥启 host network agent
+  # 让中心机的 CPU/内存/磁盘/容器也出现在 Beszel UI
+  info "启动中心机 Beszel agent（自监控）..."
+  for i in $(seq 1 20); do
+    [[ -f /omps/monitor/beszel/id_ed25519 ]] && break
+    sleep 1
+  done
+  if [[ -f /omps/monitor/beszel/id_ed25519 ]]; then
+    HUB_PUBKEY=$(ssh-keygen -y -f /omps/monitor/beszel/id_ed25519 2>/dev/null)
+    BESZEL_AGENT_IMG=$(grep '^MONITOR_IMG_BESZEL_AGENT=' monitor-config/images.env | cut -d= -f2)
+    docker rm -f omps-monitor-beszel-agent 2>/dev/null || true
+    if docker run -d --name omps-monitor-beszel-agent \
+        --network host --restart unless-stopped \
+        -e PORT=45876 -e KEY="$HUB_PUBKEY" \
+        -v /var/run/docker.sock:/var/run/docker.sock:ro \
+        "$BESZEL_AGENT_IMG" >/dev/null 2>&1; then
+      ok "中心机 Beszel agent 已启动（监听 :45876）"
+    else
+      warn "中心机 Beszel agent 启动失败"
+    fi
+  else
+    warn "Beszel 私钥未生成，中心机自监控跳过"
   fi
 else
   warn "docker-compose.monitor.yml 不存在，跳过监控栈"
