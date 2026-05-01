@@ -871,13 +871,33 @@ if [[ -f "docker-compose.monitor.yml" ]]; then
     info "监控镜像校验通过"
   fi
 
+  # 清理旧监控栈容器（VictoriaMetrics / Grafana / Alertmanager / cadvisor 等）
+  # 升级到 Beszel 后这些容器没用了，避免端口冲突 + 资源浪费
+  for c in omps-monitor-vm omps-monitor-vmagent omps-monitor-vl omps-monitor-grafana \
+           omps-monitor-alertmanager omps-monitor-node-exporter omps-monitor-cadvisor \
+           omps-monitor-vector; do
+    docker rm -f "$c" 2>/dev/null || true
+  done
+
   # Beszel 数据目录（PocketBase SQLite + ed25519 公私钥）
   sudo mkdir -p /omps/monitor/beszel 2>/dev/null || mkdir -p /omps/monitor/beszel 2>/dev/null
 
+  # 清理旧监控数据卷（VictoriaMetrics / Grafana / Alertmanager / VictoriaLogs）
+  # Beszel 数据全在 /omps/monitor/beszel/，其他目录是旧栈遗留
+  sudo rm -rf /omps/monitor/vm /omps/monitor/vmagent /omps/monitor/vl \
+              /omps/monitor/grafana /omps/monitor/alertmanager 2>/dev/null || \
+    rm -rf /omps/monitor/vm /omps/monitor/vmagent /omps/monitor/vl \
+           /omps/monitor/grafana /omps/monitor/alertmanager 2>/dev/null || true
+
   ENV_FILE_MON="$SCRIPT_DIR/.env"
   touch "$ENV_FILE_MON"
-  # 清掉历史 MONITOR_BESZEL_BIND（host network 模式不需要）
-  sed -i.bak -e '/^MONITOR_BESZEL_BIND=/d' "$ENV_FILE_MON" 2>/dev/null || true
+  # 清掉历史 var：MONITOR_VM_BIND / MONITOR_VL_BIND（旧 VictoriaMetrics 方案）
+  # MONITOR_BESZEL_BIND（host network 模式不需要）
+  sed -i.bak \
+    -e '/^MONITOR_BESZEL_BIND=/d' \
+    -e '/^MONITOR_VM_BIND=/d' \
+    -e '/^MONITOR_VL_BIND=/d' \
+    "$ENV_FILE_MON" 2>/dev/null || true
   rm -f "$ENV_FILE_MON.bak" 2>/dev/null || true
 
   # Beszel hub 用 host network 监听 8090，需 ufw 阻止公网直接访问
