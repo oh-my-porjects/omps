@@ -234,6 +234,16 @@ if [[ "$MODE" == "update" ]]; then
       fi
       ok "已补 ADMIN_PUBLIC_URL 到 .env"
     fi
+    # Beszel 凭证补齐（admin-server SSO launch 时调 ops 账号要读这俩）
+    if ! grep -q '^BESZEL_ADMIN_EMAIL=' "$ENV_FILE"; then
+      echo "BESZEL_ADMIN_EMAIL=admin@omps.local" >> "$ENV_FILE"
+      ok "已补 BESZEL_ADMIN_EMAIL 到 .env"
+    fi
+    if ! grep -q '^BESZEL_ADMIN_PASSWORD=' "$ENV_FILE"; then
+      P=$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 12)
+      echo "BESZEL_ADMIN_PASSWORD=$P" >> "$ENV_FILE"
+      ok "已补 BESZEL_ADMIN_PASSWORD 到 .env"
+    fi
   fi
 
   step "重建 Admin Server"
@@ -871,6 +881,17 @@ if grep -q '^ADMIN_PUBLIC_URL=' "$ENV_FILE" 2>/dev/null; then
   sed -i "s|^ADMIN_PUBLIC_URL=.*|ADMIN_PUBLIC_URL=$ADMIN_PUBLIC_URL|" "$ENV_FILE"
 else
   echo "ADMIN_PUBLIC_URL=$ADMIN_PUBLIC_URL" >> "$ENV_FILE"
+fi
+
+# 提前生成 Beszel 凭证（admin-server 启动前必须就位，否则容器拿到空值，
+# /api/monitoring/launch 会报"Beszel 凭证未配置"）
+# 实际 monitor 容器在 step 14 才启动，但 admin-server 容器先 import 这两个 env
+if ! grep -q '^BESZEL_ADMIN_EMAIL=' "$ENV_FILE" 2>/dev/null; then
+  echo "BESZEL_ADMIN_EMAIL=admin@omps.local" >> "$ENV_FILE"
+fi
+if ! grep -q '^BESZEL_ADMIN_PASSWORD=' "$ENV_FILE" 2>/dev/null; then
+  BESZEL_PASS_GEN=$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 12)
+  echo "BESZEL_ADMIN_PASSWORD=$BESZEL_PASS_GEN" >> "$ENV_FILE"
 fi
 
 # ── 9. Admin 平台 ──
