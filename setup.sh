@@ -902,9 +902,17 @@ if [[ -f "docker-compose.monitor.yml" ]]; then
 
   # Beszel hub 用 host network 监听 8090，需 ufw 阻止公网直接访问
   # 外部仅能通过 nginx /beszel/ 反代进
+  #
+  # 注意：ufw 端口级 deny 会同时挡住 Docker bridge 容器 → host:8090
+  # 而 nginx 容器（在 omps-network bridge）反代到 host.docker.internal:8090
+  # 必须先 allow 所有 Docker bridge 网段（172.16.0.0/12 覆盖 docker0/自定义 bridge）
+  # ufw 规则按顺序匹配，allow 必须在 deny 之前生效，所以先删 deny 再重新加
   if [[ "$OS" == "Linux" ]] && command -v ufw &>/dev/null; then
-    sudo ufw deny 8090/tcp 2>/dev/null || true
-    info "ufw 阻止公网访问 8090（Beszel 仅经 nginx 反代）"
+    sudo ufw delete deny 8090/tcp >/dev/null 2>&1 || true
+    sudo ufw allow from 172.16.0.0/12 to any port 8090 proto tcp \
+      comment 'Beszel hub from Docker bridges' >/dev/null 2>&1 || true
+    sudo ufw deny 8090/tcp comment 'Beszel hub deny public' >/dev/null 2>&1 || true
+    info "ufw 配置完成：允许 Docker bridge 访问 8090，公网 deny"
   fi
 
   # Beszel 超级管理员账号（持久化到 .env，setup 摘要输出凭证）
