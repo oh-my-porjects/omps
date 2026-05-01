@@ -881,17 +881,26 @@ if [[ -f "docker-compose.monitor.yml" ]]; then
   rm -f "$ENV_FILE_MON.bak" 2>/dev/null || true
   echo "MONITOR_BESZEL_BIND=127.0.0.1" >> "$ENV_FILE_MON"
 
-  # Beszel 超级管理员账号（首次启动自动创建，setup 摘要里输出凭证）
+  # Beszel 超级管理员账号（持久化到 .env，setup 摘要输出凭证）
   if ! grep -q '^BESZEL_ADMIN_EMAIL=' "$ENV_FILE_MON" 2>/dev/null; then
     BESZEL_ADMIN_EMAIL_VAL="admin@omps.local"
     BESZEL_ADMIN_PASSWORD_VAL=$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 12)
     echo "BESZEL_ADMIN_EMAIL=$BESZEL_ADMIN_EMAIL_VAL" >> "$ENV_FILE_MON"
     echo "BESZEL_ADMIN_PASSWORD=$BESZEL_ADMIN_PASSWORD_VAL" >> "$ENV_FILE_MON"
   fi
+  BESZEL_EMAIL=$(grep '^BESZEL_ADMIN_EMAIL=' "$ENV_FILE_MON" | cut -d= -f2)
+  BESZEL_PASSWORD=$(grep '^BESZEL_ADMIN_PASSWORD=' "$ENV_FILE_MON" | cut -d= -f2)
 
   # 镜像 tag 来自 monitor-config/images.env（单一来源）
   MON_COMPOSE="docker compose --env-file .env --env-file monitor-config/images.env -f docker-compose.monitor.yml"
   run_quiet "拉镜像" $MON_COMPOSE pull
+
+  # Beszel 不通过 env 读 superuser，必须用 CLI upsert 创建
+  # 启动 hub 前先跑一次 superuser upsert（容器只读模式，写完退出）
+  BESZEL_IMG=$(grep '^MONITOR_IMG_BESZEL=' monitor-config/images.env | cut -d= -f2)
+  run_quiet "创建 Beszel 超级管理员" docker run --rm -v /omps/monitor/beszel:/beszel_data \
+    "$BESZEL_IMG" superuser upsert "$BESZEL_EMAIL" "$BESZEL_PASSWORD"
+
   run_quiet "启动监控栈" $MON_COMPOSE up -d
 
   info "等待 Beszel 就绪..."
