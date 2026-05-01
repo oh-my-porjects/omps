@@ -862,7 +862,7 @@ step "启动监控栈"
 
 cd "$SCRIPT_DIR"
 if [[ -f "docker-compose.monitor.yml" ]]; then
-  # 拉镜像前预检：images.env 完整性 + sync_monitor.go 一致性
+  # 拉镜像前预检：images.env + sync_monitor.go 一致性
   # 远程 manifest 校验跳过（避免 docker hub rate limit；正常 pull 会发现 tag 错）
   if [[ -x "$SCRIPT_DIR/scripts/verify-monitor-images.sh" ]]; then
     if ! SKIP_REMOTE=1 "$SCRIPT_DIR/scripts/verify-monitor-images.sh" --quiet; then
@@ -871,52 +871,40 @@ if [[ -f "docker-compose.monitor.yml" ]]; then
     info "监控镜像校验通过"
   fi
 
-  # 数据目录
-  sudo mkdir -p /omps/monitor/vm /omps/monitor/vmagent /omps/monitor/grafana /omps/monitor/alertmanager /omps/monitor/vl 2>/dev/null \
-    || mkdir -p /omps/monitor/vm /omps/monitor/vmagent /omps/monitor/grafana /omps/monitor/alertmanager /omps/monitor/vl 2>/dev/null
-  # cadvisor 容器需要 root 操作 sysfs；grafana / alertmanager 容器 uid 472 / 65534 需要写权限
-  sudo chown -R 472:472 /omps/monitor/grafana 2>/dev/null || true
-  sudo chown -R 65534:65534 /omps/monitor/alertmanager 2>/dev/null || true
+  # Beszel 数据目录（PocketBase SQLite + ed25519 公私钥）
+  sudo mkdir -p /omps/monitor/beszel 2>/dev/null || mkdir -p /omps/monitor/beszel 2>/dev/null
 
-  # 探测 wg0 接口：admin-server 一般是 mesh 里的 10.0.0.1
-  # 只有 host 上确实有这个 IP 时才绑定，否则 docker 启动会因找不到接口失败
+  # Beszel 默认绑定 host 127.0.0.1（不向公网 publish，外部经 nginx /beszel/ 反代）
   ENV_FILE_MON="$SCRIPT_DIR/.env"
   touch "$ENV_FILE_MON"
-  # 移除可能存在的旧值（幂等）
-  sed -i.bak -e '/^MONITOR_VM_BIND=/d' -e '/^MONITOR_VL_BIND=/d' "$ENV_FILE_MON" 2>/dev/null || true
+  sed -i.bak -e '/^MONITOR_BESZEL_BIND=/d' "$ENV_FILE_MON" 2>/dev/null || true
   rm -f "$ENV_FILE_MON.bak" 2>/dev/null || true
-  if ip -4 addr show wg0 2>/dev/null | grep -q "inet 10.0.0.1/"; then
-    echo "MONITOR_VM_BIND=10.0.0.1" >> "$ENV_FILE_MON"
-    echo "MONITOR_VL_BIND=10.0.0.1" >> "$ENV_FILE_MON"
-    info "监控写入端口绑定 WG IP 10.0.0.1（节点端 vmagent + vector 走 WG 推送）"
-  else
-    echo "MONITOR_VM_BIND=127.0.0.1" >> "$ENV_FILE_MON"
-    echo "MONITOR_VL_BIND=127.0.0.1" >> "$ENV_FILE_MON"
-    info "监控写入端口仅本机 127.0.0.1（未检测到 wg0=10.0.0.1）"
+  echo "MONITOR_BESZEL_BIND=127.0.0.1" >> "$ENV_FILE_MON"
+
+  # Beszel 超级管理员账号（首次启动自动创建，setup 摘要里输出凭证）
+  if ! grep -q '^BESZEL_ADMIN_EMAIL=' "$ENV_FILE_MON" 2>/dev/null; then
+    BESZEL_ADMIN_EMAIL_VAL="admin@omps.local"
+    BESZEL_ADMIN_PASSWORD_VAL=$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 12)
+    echo "BESZEL_ADMIN_EMAIL=$BESZEL_ADMIN_EMAIL_VAL" >> "$ENV_FILE_MON"
+    echo "BESZEL_ADMIN_PASSWORD=$BESZEL_ADMIN_PASSWORD_VAL" >> "$ENV_FILE_MON"
   fi
 
-  # 镜像 tag 来自 monitor-config/images.env（单一来源，verify 脚本已校验）
-  # --env-file 同时加载 .env 与 images.env，前者放部署变量后者放镜像版本
+  # 镜像 tag 来自 monitor-config/images.env（单一来源）
   MON_COMPOSE="docker compose --env-file .env --env-file monitor-config/images.env -f docker-compose.monitor.yml"
   run_quiet "拉镜像" $MON_COMPOSE pull
   run_quiet "启动监控栈" $MON_COMPOSE up -d
 
-  info "等待 VictoriaMetrics 就绪..."
-  # VM 镜像是 scratch（无 wget/curl），所以从 host 上 curl 它 publish 的 127.0.0.1:8428
-  # MONITOR_VM_BIND 默认 127.0.0.1，setup 已写入 .env
-  VM_BIND=$(grep '^MONITOR_VM_BIND=' "$ENV_FILE_MON" 2>/dev/null | cut -d= -f2)
-  VM_BIND=${VM_BIND:-127.0.0.1}
-  VM_READY=0
+  info "等待 Beszel 就绪..."
+  BESZEL_READY=0
   for i in $(seq 1 30); do
-    if curl -sf -o /dev/null "http://${VM_BIND}:8428/health" 2>/dev/null; then VM_READY=1; break; fi
+    if curl -sf -o /dev/null "http://127.0.0.1:8090/api/health" 2>/dev/null; then BESZEL_READY=1; break; fi
     sleep 2
   done
-  if [[ $VM_READY -eq 1 ]]; then
-    ok "监控栈已启动（VictoriaMetrics + Grafana + Alertmanager + Exporter）"
+  if [[ $BESZEL_READY -eq 1 ]]; then
+    ok "监控栈已启动（Beszel）"
   else
-    warn "VictoriaMetrics 就绪超时（${VM_BIND}:8428）"
-    warn "诊断：docker logs omps-monitor-vm --tail 50"
-    warn "      docker ps --filter name=omps-monitor"
+    warn "Beszel 就绪超时（127.0.0.1:8090）"
+    warn "诊断：docker logs omps-monitor-beszel --tail 50"
   fi
 else
   warn "docker-compose.monitor.yml 不存在，跳过监控栈"
@@ -1049,6 +1037,24 @@ if [[ -n "$TEMP_USER" && -n "$ENTRY_PATH" ]]; then
   fi
   echo -e "   ${YELLOW}│${NC} 临时账号  ${BOLD}${TEMP_USER}${NC}"
   echo -e "   ${YELLOW}│${NC} 临时密码  ${BOLD}${TEMP_PASS}${NC}"
+  echo -e "   ${YELLOW}└──────────────────────────────────────┘${NC}"
+fi
+
+# Beszel 监控入口
+BESZEL_ADMIN_EMAIL_OUT=$(grep '^BESZEL_ADMIN_EMAIL=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d= -f2)
+BESZEL_ADMIN_PASSWORD_OUT=$(grep '^BESZEL_ADMIN_PASSWORD=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d= -f2)
+if [[ -n "$BESZEL_ADMIN_EMAIL_OUT" && -n "$BESZEL_ADMIN_PASSWORD_OUT" ]]; then
+  echo ""
+  echo -e "   ${YELLOW}┌──────────────────────────────────────┐${NC}"
+  echo -e "   ${YELLOW}│  监控面板（Beszel）                  │${NC}"
+  echo -e "   ${YELLOW}├──────────────────────────────────────┤${NC}"
+  if [[ "$WEB_MODE" == "local" ]]; then
+    echo -e "   ${YELLOW}│${NC} 入口      ${BOLD}http://localhost:80/beszel/${NC}"
+  else
+    echo -e "   ${YELLOW}│${NC} 入口      ${BOLD}https://${ADMIN_DOMAIN}/beszel/${NC}"
+  fi
+  echo -e "   ${YELLOW}│${NC} 邮箱      ${BOLD}${BESZEL_ADMIN_EMAIL_OUT}${NC}"
+  echo -e "   ${YELLOW}│${NC} 密码      ${BOLD}${BESZEL_ADMIN_PASSWORD_OUT}${NC}"
   echo -e "   ${YELLOW}└──────────────────────────────────────┘${NC}"
 fi
 
