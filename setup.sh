@@ -719,9 +719,40 @@ else
   ok "已生成 API 前缀: /$API_PREFIX"
 fi
 
-# 生成 nginx 配置
+# 读取或生成 MONITOR 前缀（监控面板入口混淆，8 位短 UUID）
+#
+# 同 API_PREFIX 模式：环境变量 > .env > 自动生成
+# 重装通过 MONITOR_PREFIX=xxx 一行命令复用旧值
+MON_PREFIX_FROM_ENV="${MONITOR_PREFIX:-}"
+MONITOR_PREFIX=""
+
+if [[ -n "$MON_PREFIX_FROM_ENV" ]]; then
+  MONITOR_PREFIX="${MON_PREFIX_FROM_ENV:0:8}"
+  if [[ -f "$ENV_FILE" ]] && grep -q "MONITOR_PREFIX=" "$ENV_FILE"; then
+    sed -i "s/^MONITOR_PREFIX=.*/MONITOR_PREFIX=$MONITOR_PREFIX/" "$ENV_FILE"
+  else
+    echo "MONITOR_PREFIX=$MONITOR_PREFIX" >> "$ENV_FILE"
+  fi
+  ok "监控前缀（来自环境变量）: /$MONITOR_PREFIX"
+elif [[ -f "$ENV_FILE" ]] && grep -q "MONITOR_PREFIX=" "$ENV_FILE"; then
+  MONITOR_PREFIX=$(grep "MONITOR_PREFIX=" "$ENV_FILE" | cut -d= -f2)
+  if [[ ${#MONITOR_PREFIX} -gt 8 ]]; then
+    MONITOR_PREFIX=${MONITOR_PREFIX:0:8}
+    sed -i "s/^MONITOR_PREFIX=.*/MONITOR_PREFIX=$MONITOR_PREFIX/" "$ENV_FILE"
+  fi
+  ok "监控前缀: /$MONITOR_PREFIX"
+else
+  MON_UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]')
+  MONITOR_PREFIX=${MON_UUID:0:8}
+  echo "MONITOR_PREFIX=$MONITOR_PREFIX" >> "$ENV_FILE"
+  ok "已生成监控前缀: /$MONITOR_PREFIX"
+fi
+
+# 生成 nginx 配置（同时替换 API_PREFIX 与 MONITOR_PREFIX）
 mkdir -p /omps/admin-service/nginx
-sed "s/\${API_PREFIX}/$API_PREFIX/g" "$SCRIPT_DIR/nginx/default.conf.template" > /omps/admin-service/nginx/default.conf
+sed -e "s/\${API_PREFIX}/$API_PREFIX/g" \
+    -e "s/\${MONITOR_PREFIX}/$MONITOR_PREFIX/g" \
+    "$SCRIPT_DIR/nginx/default.conf.template" > /omps/admin-service/nginx/default.conf
 ok "Nginx 配置已生成"
 
 # 部署模式
@@ -770,6 +801,20 @@ else
     ok "admin-web 本机部署"
   fi
   echo "$WEB_MODE" > "$DEPLOY_CONFIG"
+fi
+
+# 推导 ADMIN_PUBLIC_URL（Beszel APP_URL / monitor enter URL 用）
+# external 模式：用户提供的 ADMIN_DOMAIN，HTTPS（CF 接管）
+# local 模式：localhost 反向代理，HTTP
+if [[ "$WEB_MODE" == "external" && -n "$ADMIN_DOMAIN" ]]; then
+  ADMIN_PUBLIC_URL="https://$ADMIN_DOMAIN"
+else
+  ADMIN_PUBLIC_URL="http://localhost"
+fi
+if grep -q '^ADMIN_PUBLIC_URL=' "$ENV_FILE" 2>/dev/null; then
+  sed -i "s|^ADMIN_PUBLIC_URL=.*|ADMIN_PUBLIC_URL=$ADMIN_PUBLIC_URL|" "$ENV_FILE"
+else
+  echo "ADMIN_PUBLIC_URL=$ADMIN_PUBLIC_URL" >> "$ENV_FILE"
 fi
 
 # ── 9. Admin 平台 ──
@@ -1113,21 +1158,28 @@ if [[ -n "$TEMP_USER" && -n "$ENTRY_PATH" ]]; then
   echo -e "   ${YELLOW}└──────────────────────────────────────┘${NC}"
 fi
 
-# Beszel 监控入口
+# Beszel 监控面板入口（subpath + admin SSO + OTP 强制）
+#
+# 用户实际进入流程:
+#   1. admin-web 登录 → 监控面板页 → 输入 OTP → 一键打开新标签
+#   2. 也可直接 admin-server 调 /api/monitoring/launch 拿一次性 enter URL
+# 直接访问 /<MONITOR_PREFIX>/ 不带 cookie → 401（防扫描）
+# Beszel 内部 ops 账号给运维应急用（绕过 admin-web 时的后门）
 BESZEL_ADMIN_EMAIL_OUT=$(grep '^BESZEL_ADMIN_EMAIL=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d= -f2)
 BESZEL_ADMIN_PASSWORD_OUT=$(grep '^BESZEL_ADMIN_PASSWORD=' "$SCRIPT_DIR/.env" 2>/dev/null | cut -d= -f2)
 if [[ -n "$BESZEL_ADMIN_EMAIL_OUT" && -n "$BESZEL_ADMIN_PASSWORD_OUT" ]]; then
   echo ""
   echo -e "   ${YELLOW}┌──────────────────────────────────────┐${NC}"
-  echo -e "   ${YELLOW}│  监控面板（Beszel）                  │${NC}"
+  echo -e "   ${YELLOW}│  监控面板（Beszel + admin SSO）      │${NC}"
   echo -e "   ${YELLOW}├──────────────────────────────────────┤${NC}"
   if [[ "$WEB_MODE" == "local" ]]; then
-    echo -e "   ${YELLOW}│${NC} 入口      ${BOLD}http://localhost:80/beszel/${NC}"
+    echo -e "   ${YELLOW}│${NC} 入口      ${BOLD}http://localhost:80/${MONITOR_PREFIX}/${NC}"
   else
-    echo -e "   ${YELLOW}│${NC} 入口      ${BOLD}https://${ADMIN_DOMAIN}/beszel/${NC}"
+    echo -e "   ${YELLOW}│${NC} 入口      ${BOLD}https://${ADMIN_DOMAIN}/${MONITOR_PREFIX}/${NC}"
   fi
-  echo -e "   ${YELLOW}│${NC} 邮箱      ${BOLD}${BESZEL_ADMIN_EMAIL_OUT}${NC}"
-  echo -e "   ${YELLOW}│${NC} 密码      ${BOLD}${BESZEL_ADMIN_PASSWORD_OUT}${NC}"
+  echo -e "   ${YELLOW}│${NC} 进入方式  ${DIM}admin-web → 监控 → OTP${NC}"
+  echo -e "   ${YELLOW}│${NC} 应急账号  ${BOLD}${BESZEL_ADMIN_EMAIL_OUT}${NC}"
+  echo -e "   ${YELLOW}│${NC} 应急密码  ${BOLD}${BESZEL_ADMIN_PASSWORD_OUT}${NC}"
   echo -e "   ${YELLOW}└──────────────────────────────────────┘${NC}"
 fi
 
