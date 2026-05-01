@@ -234,7 +234,10 @@ if [[ "$MODE" == "update" ]]; then
     GO_ARCH=$( [[ "$ARCH" == "arm64" ]] && echo arm64 || echo amd64 )
     run_spin "编译 Go 二进制..." docker run --rm -v "$SCRIPT_DIR/cli-server:/app" -w /app golang:1.26 \
       sh -c "CGO_ENABLED=0 GOOS=$GO_OS GOARCH=$GO_ARCH go build -o cli-server ./cmd/server"
-    ok "CLI Server 构建完成"
+    # 写 VERSION 文件，cli-server 启动时读一次给 /health 接口用
+    CLI_HASH=$(git -C "$SCRIPT_DIR/cli-server" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    echo "$CLI_HASH" > "$SCRIPT_DIR/cli-server/VERSION" 2>/dev/null || true
+    ok "CLI Server 构建完成 ($CLI_HASH)"
   else
     warn "cli-server/ 目录不存在，跳过"
   fi
@@ -837,7 +840,10 @@ if [[ -d "$SCRIPT_DIR/cli-server" ]]; then
   GO_ARCH=$( [[ "$ARCH" == "arm64" ]] && echo arm64 || echo amd64 )
   run_spin "编译 Go 二进制..." docker run --rm -v "$SCRIPT_DIR/cli-server:/app" -w /app golang:1.26 \
     sh -c "CGO_ENABLED=0 GOOS=$GO_OS GOARCH=$GO_ARCH go build -o cli-server ./cmd/server"
-  ok "CLI Server 构建完成"
+  # 写 VERSION 文件，cli-server 启动时读一次给 /health 接口用
+  CLI_HASH=$(git -C "$SCRIPT_DIR/cli-server" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+  echo "$CLI_HASH" > "$SCRIPT_DIR/cli-server/VERSION" 2>/dev/null || true
+  ok "CLI Server 构建完成 ($CLI_HASH)"
 else
   warn "cli-server/ 目录不存在，跳过"
 fi
