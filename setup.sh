@@ -148,7 +148,18 @@ ARCH="$(uname -m)"
 # ══════════════════════════════════════
 
 if [[ "$MODE" == "update" ]]; then
-  SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+  # SCRIPT_PATH = setup.sh 真实绝对路径(跟 $0 不一样,$0 可能是相对的 ./omps-setup/setup.sh)
+  SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  # SCRIPT_DIR 必须指向 workspace 根(含 admin-server 等子目录)
+  # 兼容两种部署方式:
+  #   1) setup.sh 直接放 workspace 根 → 脚本所在目录 = workspace 根
+  #   2) setup.sh 在 omps-setup/ 子目录 → 脚本所在目录的父目录 = workspace 根
+  SCRIPT_DIR_RAW="$(cd "$(dirname "$0")" && pwd)"
+  if [[ "$(basename "$SCRIPT_DIR_RAW")" == "omps-setup" ]]; then
+    SCRIPT_DIR="$(dirname "$SCRIPT_DIR_RAW")"
+  else
+    SCRIPT_DIR="$SCRIPT_DIR_RAW"
+  fi
 
   echo ""
   echo -e "${BLUE}  ┌──────────────────────────────────┐${NC}"
@@ -164,14 +175,15 @@ if [[ "$MODE" == "update" ]]; then
     run_quiet "重置主仓库" git reset --hard origin/$(git rev-parse --abbrev-ref HEAD)
     NEW_WS=$(git rev-parse HEAD 2>/dev/null || echo "")
     ok "主仓库已更新"
-    # ⚠ 关键：如果 setup.sh 在 workspace 根里（常见部署方式），workspace reset
-    # 会替换当前正在执行的 setup.sh 文件。bash 是边读边执行，继续跑会字节错位
-    # 读到新脚本的内容，诡异崩溃或静默跳过后续流程。
+    # ⚠ 关键:如果 setup.sh 在 workspace 根里(常见部署方式),workspace reset
+    # 会替换当前正在执行的 setup.sh 文件。bash 是边读边执行,继续跑会字节错位
+    # 读到新脚本的内容,诡异崩溃或静默跳过后续流程。
     # OMPS_SETUP_RELOADED 守卫避免无限递归
+    # 用绝对路径 reload(原 $0 是相对路径,cd 之后失效)
     if [[ "$OLD_WS" != "$NEW_WS" && -z "$OMPS_SETUP_RELOADED" ]]; then
       ok "检测到脚本自身有更新，重新加载最新版本..."
       export OMPS_SETUP_RELOADED=1
-      exec bash "$0" "$@"
+      exec bash "$SCRIPT_PATH" "$@"
     fi
   fi
 
@@ -203,6 +215,27 @@ if [[ "$MODE" == "update" ]]; then
     fi
   done
 
+  # 监控配置补齐（涵盖老版本升级到新版本的场景：MONITOR_PREFIX 缺失补上）
+  # 必须在重启 admin-server 之前完成，否则容器拿不到新增 env
+  cd "$SCRIPT_DIR"
+  ENV_FILE="$SCRIPT_DIR/.env"
+  if [[ -f "$ENV_FILE" ]]; then
+    if ! grep -q '^MONITOR_PREFIX=' "$ENV_FILE"; then
+      MON_UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]')
+      echo "MONITOR_PREFIX=${MON_UUID:0:8}" >> "$ENV_FILE"
+      ok "已补 MONITOR_PREFIX 到 .env"
+    fi
+    if ! grep -q '^ADMIN_PUBLIC_URL=' "$ENV_FILE"; then
+      DOMAIN=$(grep '^ADMIN_DOMAIN=' "$ENV_FILE" 2>/dev/null | cut -d= -f2)
+      if [[ -n "$DOMAIN" ]]; then
+        echo "ADMIN_PUBLIC_URL=https://$DOMAIN" >> "$ENV_FILE"
+      else
+        echo "ADMIN_PUBLIC_URL=http://localhost" >> "$ENV_FILE"
+      fi
+      ok "已补 ADMIN_PUBLIC_URL 到 .env"
+    fi
+  fi
+
   step "重建 Admin Server"
   cd "$SCRIPT_DIR"
   SERVER_HASH=$(git -C admin-server rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -227,6 +260,29 @@ if [[ "$MODE" == "update" ]]; then
     sleep 2
   done
   ok "Admin 平台已重启"
+
+  # nginx 重渲染（覆盖老 /beszel/ 模板 + 新 MONITOR_PREFIX 路径）
+  if [[ -f "$SCRIPT_DIR/nginx/default.conf.template" && -f "$ENV_FILE" ]]; then
+    API_PREFIX_VAL=$(grep '^API_PREFIX=' "$ENV_FILE" | cut -d= -f2)
+    MONITOR_PREFIX_VAL=$(grep '^MONITOR_PREFIX=' "$ENV_FILE" | cut -d= -f2)
+    if [[ -n "$API_PREFIX_VAL" ]]; then
+      mkdir -p /omps/admin-service/nginx
+      sed -e "s/\${API_PREFIX}/$API_PREFIX_VAL/g" \
+          -e "s/\${MONITOR_PREFIX}/$MONITOR_PREFIX_VAL/g" \
+          "$SCRIPT_DIR/nginx/default.conf.template" > /omps/admin-service/nginx/default.conf
+      docker exec omps-admin-gateway nginx -t >/dev/null 2>&1 \
+        && docker exec omps-admin-gateway nginx -s reload >/dev/null 2>&1 \
+        && ok "Nginx 配置已重载" \
+        || warn "Nginx 重载失败"
+    fi
+  fi
+
+  # 重启 monitor hub 应用最新 APP_URL（subpath base）
+  if [[ -f "$SCRIPT_DIR/docker-compose.monitor.yml" ]]; then
+    MON_COMPOSE_UP="docker compose --env-file .env --env-file monitor-config/images.env -f docker-compose.monitor.yml"
+    run_quiet "重启 Beszel hub" $MON_COMPOSE_UP up -d --force-recreate beszel
+    ok "Beszel hub 已应用最新配置"
+  fi
 
   step "重建 CLI Server"
   if [[ -d "$SCRIPT_DIR/cli-server" ]]; then
