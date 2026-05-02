@@ -299,6 +299,13 @@ if [[ "$MODE" == "update" ]]; then
     done < "$SCRIPT_DIR/monitor-config/images.env"
   fi
 
+  # 老版本 hub 用 host network 监听 8090 时留下的 ufw 规则，新方案不再暴露
+  # 这里清掉避免残留（无害但是多余）
+  if [[ "$OS" == "Linux" ]] && command -v ufw &>/dev/null; then
+    sudo ufw delete deny 8090/tcp >/dev/null 2>&1 || true
+    sudo ufw delete allow from 172.16.0.0/12 to any port 8090 proto tcp >/dev/null 2>&1 || true
+  fi
+
   # 重启 monitor hub 应用最新 APP_URL/MONITOR_PREFIX（profile=monitor 显式带起）
   # admin-server 重启后 hub（service:server）的 ns 引用失效，必须 force-recreate
   run_quiet "重启 Beszel hub" docker compose --profile monitor up -d --force-recreate beszel
