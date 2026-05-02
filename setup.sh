@@ -397,25 +397,60 @@ echo ""
 echo -e "   系统: ${BOLD}$OS $ARCH${NC}"
 
 # ══════════════════════════════════════
-# 前置配置收集（一次性问完，回车后全自动）
+# 前置配置（config-first：收集 → 摘要 → 一次回车 → 全自动）
 #
-# 设计目标：用户输入完所有配置 → 按一次回车 → 后续无人值守
-# 集中收集：SSH 公钥（GitHub）、SSH 新端口、admin-web 部署模式 + 域名
-# 收集时不写盘（workspace 可能还没 clone），变量记到 PRECONF_*，由后面的
-# step 阶段实际落盘
+# 三阶段：
+#   1. 收集：交互问询 + 自动加载 / 生成所有 prefix / 凭证（仅内存）
+#   2. 摘要：把所有配置一次性展示，让用户审一眼
+#   3. 待办 + 单一确认：列出 GitHub 公钥 / 云安全组待办，按回车开跑
+#
+# workspace 此时可能还没 clone，前置阶段不写盘，所有值存 PRECONF_*，
+# 由 step 8 阶段统一落盘到 workspace 内的 .env / .deploy-mode
 # ══════════════════════════════════════
 
 echo ""
-echo -e "${BOLD}── 配置（输入完成后将进入自动部署）──${NC}"
+echo -e "${BOLD}── 配置（先输入 → 看摘要 → 一次回车后全自动）──${NC}"
 
 PRECONF_NEW_PORT=""
 PRECONF_NEED_SSH_CHANGE=false
 PRECONF_WEB_MODE=""
 PRECONF_ADMIN_DOMAIN=""
+PRECONF_API_PREFIX=""
+PRECONF_API_PREFIX_SRC=""
+PRECONF_MONITOR_PREFIX=""
+PRECONF_MONITOR_PREFIX_SRC=""
+PRECONF_BESZEL_EMAIL="admin@omps.local"
+PRECONF_BESZEL_PASSWORD=""
+PRECONF_BESZEL_PASS_SRC=""
+PRECONF_ADMIN_PUBLIC_URL=""
 NEED_GH_VERIFY=false
 CURRENT_PORT=""
 
-# ── SSH Key（提前生成 + 检测 GitHub 是否已连通）──
+# 检测旧 .env / .deploy-mode（重装时复用旧值）
+PRECONF_DEPLOY_FILE=""
+PRECONF_ENV_FILE=""
+if [[ -f "./.deploy-mode" ]]; then
+  PRECONF_DEPLOY_FILE="./.deploy-mode"
+  [[ -f "./.env" ]] && PRECONF_ENV_FILE="./.env"
+elif [[ -f "$WORKSPACE_DIR/.deploy-mode" ]]; then
+  PRECONF_DEPLOY_FILE="$WORKSPACE_DIR/.deploy-mode"
+  [[ -f "$WORKSPACE_DIR/.env" ]] && PRECONF_ENV_FILE="$WORKSPACE_DIR/.env"
+fi
+
+# 工具：从 .env 读 KEY=VALUE
+read_env() {
+  [[ -z "$PRECONF_ENV_FILE" ]] && return
+  grep "^$1=" "$PRECONF_ENV_FILE" 2>/dev/null | cut -d= -f2-
+}
+
+# 工具：生成 8 位短 UUID
+gen_short_uuid() {
+  local u
+  u=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]')
+  echo "${u:0:8}"
+}
+
+# ───── 阶段 1.1：SSH Key（提前生成 + 检测 GitHub 是否已连通）─────
 SSH_KEY="$HOME/.ssh/id_ed25519"
 SSH_PUB="$SSH_KEY.pub"
 if [[ ! -f "$SSH_PUB" ]]; then
@@ -430,9 +465,10 @@ if ssh -T git@github.com </dev/null 2>&1 | grep -q "successfully authenticated";
   ok "GitHub SSH 已连通"
 else
   NEED_GH_VERIFY=true
+  info "GitHub SSH 待添加公钥（稍后会在待办清单里告诉你怎么贴）"
 fi
 
-# ── SSH 新端口（仅 Linux + 当前 22）──
+# ───── 阶段 1.2：SSH 新端口（仅 Linux + 当前 22）─────
 if [[ "$OS" == "Linux" ]]; then
   SSHD_CONFIG="/etc/ssh/sshd_config"
   CURRENT_PORT=$(grep -E "^Port " "$SSHD_CONFIG" 2>/dev/null | awk '{print $2}')
@@ -450,39 +486,22 @@ if [[ "$OS" == "Linux" ]]; then
   fi
 fi
 
-# ── admin-web 部署模式（重装时优先复用旧值，不再重复问）──
-# 兼容场景：
-#   1. 当前目录就是 workspace（含 .deploy-mode + .env）
-#   2. 当前目录的子目录 omps-platform/ 是 workspace（脚本第一次跑后状态）
-#   3. 环境变量 ADMIN_DOMAIN=xxx 直接传入
-#   4. 全新机器，三者都没有 → 交互问
-PRECONF_DEPLOY_FILE=""
-PRECONF_ENV_FILE=""
-if [[ -f "./.deploy-mode" ]]; then
-  PRECONF_DEPLOY_FILE="./.deploy-mode"
-  PRECONF_ENV_FILE="./.env"
-elif [[ -f "$WORKSPACE_DIR/.deploy-mode" ]]; then
-  PRECONF_DEPLOY_FILE="$WORKSPACE_DIR/.deploy-mode"
-  PRECONF_ENV_FILE="$WORKSPACE_DIR/.env"
-fi
-
+# ───── 阶段 1.3：admin-web 部署模式（环境变量 > 旧配置 > 交互问）─────
 if [[ -n "${ADMIN_DOMAIN:-}" ]]; then
   PRECONF_WEB_MODE="external"
   PRECONF_ADMIN_DOMAIN="${ADMIN_DOMAIN}"
-  ok "admin-web 部署模式（来自环境变量）：独立部署，域名 $PRECONF_ADMIN_DOMAIN"
 elif [[ -n "$PRECONF_DEPLOY_FILE" ]]; then
   PRECONF_WEB_MODE=$(cat "$PRECONF_DEPLOY_FILE")
-  if [[ "$PRECONF_WEB_MODE" == "external" ]] && [[ -f "$PRECONF_ENV_FILE" ]]; then
-    PRECONF_ADMIN_DOMAIN=$(grep "^ADMIN_DOMAIN=" "$PRECONF_ENV_FILE" | cut -d= -f2)
+  if [[ "$PRECONF_WEB_MODE" == "external" ]]; then
+    PRECONF_ADMIN_DOMAIN=$(read_env ADMIN_DOMAIN)
   fi
-  ok "admin-web 部署模式（沿用旧配置）：$( [[ "$PRECONF_WEB_MODE" == "external" ]] && echo "独立部署 ($PRECONF_ADMIN_DOMAIN)" || echo "本机部署" )"
 else
   echo ""
   select_option "   admin-web 前端部署方式：" "本机部署（Docker 容器）" "独立部署（Cloudflare Pages 等）"
   if [[ $SELECTED -eq 1 ]]; then
     PRECONF_WEB_MODE="external"
     echo ""
-    read -rep "   请输入指向本服务器的 API 域名（如 api.example.com）: " PRECONF_ADMIN_DOMAIN
+    read -rep "   请输入指向本服务器的 API 域名（admin-server 对外地址，如 api.example.com）: " PRECONF_ADMIN_DOMAIN
     if [[ -z "$PRECONF_ADMIN_DOMAIN" ]]; then
       fail "API 域名不能为空，独立部署必须配置域名"
     fi
@@ -491,12 +510,91 @@ else
   fi
 fi
 
-# ── 一次性提示用户去做的事（GitHub 公钥 + 云安全组）──
+# ───── 阶段 1.4：API_PREFIX（环境变量 > 旧 .env > 新生成）─────
+if [[ -n "${API_PREFIX:-}" ]]; then
+  PRECONF_API_PREFIX="${API_PREFIX:0:8}"
+  PRECONF_API_PREFIX_SRC="环境变量"
+else
+  TMP_PREFIX=$(read_env API_PREFIX)
+  if [[ -n "$TMP_PREFIX" ]]; then
+    PRECONF_API_PREFIX="${TMP_PREFIX:0:8}"
+    PRECONF_API_PREFIX_SRC="沿用旧值"
+  else
+    PRECONF_API_PREFIX=$(gen_short_uuid)
+    PRECONF_API_PREFIX_SRC="新生成"
+  fi
+fi
+
+# ───── 阶段 1.5：MONITOR_PREFIX（环境变量 > 旧 .env > 新生成）─────
+if [[ -n "${MONITOR_PREFIX:-}" ]]; then
+  PRECONF_MONITOR_PREFIX="${MONITOR_PREFIX:0:8}"
+  PRECONF_MONITOR_PREFIX_SRC="环境变量"
+else
+  TMP_PREFIX=$(read_env MONITOR_PREFIX)
+  if [[ -n "$TMP_PREFIX" ]]; then
+    PRECONF_MONITOR_PREFIX="${TMP_PREFIX:0:8}"
+    PRECONF_MONITOR_PREFIX_SRC="沿用旧值"
+  else
+    PRECONF_MONITOR_PREFIX=$(gen_short_uuid)
+    PRECONF_MONITOR_PREFIX_SRC="新生成"
+  fi
+fi
+
+# ───── 阶段 1.6：BESZEL 凭证（旧 .env > 新生成）─────
+TMP_BESZEL_EMAIL=$(read_env BESZEL_ADMIN_EMAIL)
+[[ -n "$TMP_BESZEL_EMAIL" ]] && PRECONF_BESZEL_EMAIL="$TMP_BESZEL_EMAIL"
+TMP_BESZEL_PASS=$(read_env BESZEL_ADMIN_PASSWORD)
+if [[ -n "$TMP_BESZEL_PASS" ]]; then
+  PRECONF_BESZEL_PASSWORD="$TMP_BESZEL_PASS"
+  PRECONF_BESZEL_PASS_SRC="沿用旧值"
+else
+  PRECONF_BESZEL_PASSWORD=$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 12)
+  PRECONF_BESZEL_PASS_SRC="新生成"
+fi
+
+# ───── 阶段 1.7：推导 ADMIN_PUBLIC_URL ─────
+if [[ "$PRECONF_WEB_MODE" == "external" && -n "$PRECONF_ADMIN_DOMAIN" ]]; then
+  PRECONF_ADMIN_PUBLIC_URL="https://$PRECONF_ADMIN_DOMAIN"
+else
+  PRECONF_ADMIN_PUBLIC_URL="http://localhost"
+fi
+
+# ══════════════════════════════════════
+# 阶段 2：摘要（一次性展示所有配置）
+# ══════════════════════════════════════
+
+echo ""
+echo -e "${BOLD}── 配置摘要 ──${NC}"
+echo ""
+printf "   %-18s %s\n" "系统" "$OS $ARCH"
+if [[ "$OS" == "Linux" ]]; then
+  if [[ "$PRECONF_NEED_SSH_CHANGE" == "true" ]]; then
+    printf "   %-18s %s → ${BOLD}%s${NC}\n" "SSH 端口" "$CURRENT_PORT" "$PRECONF_NEW_PORT"
+  else
+    printf "   %-18s %s（不变）\n" "SSH 端口" "$CURRENT_PORT"
+  fi
+fi
+if [[ "$PRECONF_WEB_MODE" == "external" ]]; then
+  printf "   %-18s %s\n" "admin-web 部署" "独立部署（Cloudflare Pages 等）"
+  printf "   %-18s %s\n" "API 域名" "$PRECONF_ADMIN_DOMAIN"
+else
+  printf "   %-18s %s\n" "admin-web 部署" "本机部署（Docker 容器）"
+fi
+printf "   %-18s %s\n" "对外访问 URL" "$PRECONF_ADMIN_PUBLIC_URL"
+printf "   %-18s /%s  ${DIM}(%s)${NC}\n" "API 入口前缀" "$PRECONF_API_PREFIX" "$PRECONF_API_PREFIX_SRC"
+printf "   %-18s /%s  ${DIM}(%s)${NC}\n" "监控入口前缀" "$PRECONF_MONITOR_PREFIX" "$PRECONF_MONITOR_PREFIX_SRC"
+printf "   %-18s %s\n" "Beszel 应急账号" "$PRECONF_BESZEL_EMAIL"
+printf "   %-18s %s  ${DIM}(%s)${NC}\n" "Beszel 应急密码" "$PRECONF_BESZEL_PASSWORD" "$PRECONF_BESZEL_PASS_SRC"
+echo ""
+echo -e "   ${DIM}所有需要交互的配置已收集完。后续步骤全自动。${NC}"
+
+# ══════════════════════════════════════
+# 阶段 3：待办 + 单一确认
+# ══════════════════════════════════════
+
 if [[ "$NEED_GH_VERIFY" == "true" || "$PRECONF_NEED_SSH_CHANGE" == "true" || "$OS" == "Linux" ]]; then
   echo ""
-  echo -e "   ${YELLOW}┌──────────────────────────────────────────────────────┐${NC}"
-  echo -e "   ${YELLOW}│  接下来在 GitHub / 云控制台 完成以下事情             │${NC}"
-  echo -e "   ${YELLOW}└──────────────────────────────────────────────────────┘${NC}"
+  echo -e "${BOLD}── 在按回车前，请去做以下事情 ──${NC}"
 
   PRECONF_TODO_IDX=0
 
@@ -523,23 +621,23 @@ if [[ "$NEED_GH_VERIFY" == "true" || "$PRECONF_NEED_SSH_CHANGE" == "true" || "$O
     fi
     echo -e "      ${DIM}阿里云 / 腾讯云 / AWS 都有独立的「安全组」，与本机 ufw 是两层${NC}"
   fi
+fi
 
-  echo ""
-  echo -e "   ${DIM}全部做完后按一次回车，脚本会自动验证并进入无人值守部署${NC}"
-  read -rp "$(echo -e "   ${BLUE}▸${NC} 完成后按回车继续...")" _
+echo ""
+echo -e "   ${DIM}确认上面的摘要无误、待办已完成后，按回车开始无人值守部署（Ctrl+C 取消）${NC}"
+read -rp "$(echo -e "   ${BLUE}▸${NC} 按回车开始部署...")" _
 
-  # GitHub SSH 循环验证（直到通过）
-  if [[ "$NEED_GH_VERIFY" == "true" ]]; then
-    while true; do
-      if ssh -T git@github.com </dev/null 2>&1 | grep -q "successfully authenticated"; then
-        ok "GitHub SSH 连接成功"
-        break
-      else
-        warn "GitHub SSH 还没通，请确认公钥已添加"
-        read -rp "$(echo -e "   ${BLUE}▸${NC} 添加完按回车再试...")" _
-      fi
-    done
-  fi
+# GitHub SSH 循环验证（直到通过）
+if [[ "$NEED_GH_VERIFY" == "true" ]]; then
+  while true; do
+    if ssh -T git@github.com </dev/null 2>&1 | grep -q "successfully authenticated"; then
+      ok "GitHub SSH 连接成功"
+      break
+    else
+      warn "GitHub SSH 还没通，请确认公钥已添加"
+      read -rp "$(echo -e "   ${BLUE}▸${NC} 添加完按回车再试...")" _
+    fi
+  done
 fi
 
 echo ""
@@ -857,96 +955,40 @@ fi
 
 # ── 8. 部署模式选择 + API 前缀 ──
 
-step "配置部署模式"
+step "落盘配置"
 cd "$SCRIPT_DIR"
 
 DEPLOY_CONFIG="$SCRIPT_DIR/.deploy-mode"
 ENV_FILE="$SCRIPT_DIR/.env"
-WEB_MODE="local"
-ADMIN_DOMAIN=""
 
-# 读取或生成 API 前缀（8 位短 UUID）
-#
-# 优先级：环境变量 > .env 文件 > 自动生成
-# 重装服务器时通过环境变量传入旧值即可保持 prefix 不变，避免重新配 GH secret：
-#   API_PREFIX=719e44d5 ADMIN_DOMAIN=xxx bash setup.sh
-PREFIX_FROM_ENV="${API_PREFIX:-}"
-API_PREFIX=""
+# 所有值已在前置阶段确定（PRECONF_*），这里只把它们写到 workspace 内的
+# .env / .deploy-mode。前置阶段时 workspace 可能还没 clone，无法写盘。
 
-if [[ -n "$PREFIX_FROM_ENV" ]]; then
-  # 环境变量优先：覆盖 .env 里可能的旧值，确保跨重装稳定
-  API_PREFIX="${PREFIX_FROM_ENV:0:8}"
-  if [[ -f "$ENV_FILE" ]] && grep -q "API_PREFIX=" "$ENV_FILE"; then
-    sed -i "s/^API_PREFIX=.*/API_PREFIX=$API_PREFIX/" "$ENV_FILE"
+# 工具：upsert KEY=VALUE 到 .env
+upsert_env() {
+  local key="$1" val="$2"
+  if grep -q "^$key=" "$ENV_FILE" 2>/dev/null; then
+    sed -i "s|^$key=.*|$key=$val|" "$ENV_FILE"
   else
-    echo "API_PREFIX=$API_PREFIX" >> "$ENV_FILE"
+    echo "$key=$val" >> "$ENV_FILE"
   fi
-  ok "API 前缀（来自环境变量）: /$API_PREFIX"
-elif [[ -f "$ENV_FILE" ]] && grep -q "API_PREFIX=" "$ENV_FILE"; then
-  API_PREFIX=$(grep "API_PREFIX=" "$ENV_FILE" | cut -d= -f2)
-  # 如果是旧的长 UUID，自动截短
-  if [[ ${#API_PREFIX} -gt 8 ]]; then
-    API_PREFIX=${API_PREFIX:0:8}
-    sed -i "s/^API_PREFIX=.*/API_PREFIX=$API_PREFIX/" "$ENV_FILE"
-    ok "API 前缀已截短: /$API_PREFIX"
-  else
-    ok "API 前缀: /$API_PREFIX"
-  fi
-else
-  FULL_UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]')
-  API_PREFIX=${FULL_UUID:0:8}
-  echo "API_PREFIX=$API_PREFIX" >> "$ENV_FILE"
-  ok "已生成 API 前缀: /$API_PREFIX"
-fi
+}
 
-# 读取或生成 MONITOR 前缀（监控面板入口混淆，8 位短 UUID）
-#
-# 同 API_PREFIX 模式：环境变量 > .env > 自动生成
-# 重装通过 MONITOR_PREFIX=xxx 一行命令复用旧值
-MON_PREFIX_FROM_ENV="${MONITOR_PREFIX:-}"
-MONITOR_PREFIX=""
-
-if [[ -n "$MON_PREFIX_FROM_ENV" ]]; then
-  MONITOR_PREFIX="${MON_PREFIX_FROM_ENV:0:8}"
-  if [[ -f "$ENV_FILE" ]] && grep -q "MONITOR_PREFIX=" "$ENV_FILE"; then
-    sed -i "s/^MONITOR_PREFIX=.*/MONITOR_PREFIX=$MONITOR_PREFIX/" "$ENV_FILE"
-  else
-    echo "MONITOR_PREFIX=$MONITOR_PREFIX" >> "$ENV_FILE"
-  fi
-  ok "监控前缀（来自环境变量）: /$MONITOR_PREFIX"
-elif [[ -f "$ENV_FILE" ]] && grep -q "MONITOR_PREFIX=" "$ENV_FILE"; then
-  MONITOR_PREFIX=$(grep "MONITOR_PREFIX=" "$ENV_FILE" | cut -d= -f2)
-  if [[ ${#MONITOR_PREFIX} -gt 8 ]]; then
-    MONITOR_PREFIX=${MONITOR_PREFIX:0:8}
-    sed -i "s/^MONITOR_PREFIX=.*/MONITOR_PREFIX=$MONITOR_PREFIX/" "$ENV_FILE"
-  fi
-  ok "监控前缀: /$MONITOR_PREFIX"
-else
-  MON_UUID=$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen | tr '[:upper:]' '[:lower:]')
-  MONITOR_PREFIX=${MON_UUID:0:8}
-  echo "MONITOR_PREFIX=$MONITOR_PREFIX" >> "$ENV_FILE"
-  ok "已生成监控前缀: /$MONITOR_PREFIX"
-fi
-
-# 生成 nginx 配置（同时替换 API_PREFIX 与 MONITOR_PREFIX）
-mkdir -p /omps/admin-service/nginx
-sed -e "s/\${API_PREFIX}/$API_PREFIX/g" \
-    -e "s/\${MONITOR_PREFIX}/$MONITOR_PREFIX/g" \
-    "$SCRIPT_DIR/nginx/default.conf.template" > /omps/admin-service/nginx/default.conf
-ok "Nginx 配置已生成"
-
-# 部署模式：值已在前置配置阶段确定（PRECONF_WEB_MODE / PRECONF_ADMIN_DOMAIN）
-# 这里只负责落盘到 workspace 内的 .env / .deploy-mode（前置阶段时 workspace
-# 可能还没 clone，无法写盘）
+# 全部从 PRECONF_* 一次性落盘
 WEB_MODE="$PRECONF_WEB_MODE"
 ADMIN_DOMAIN="$PRECONF_ADMIN_DOMAIN"
+API_PREFIX="$PRECONF_API_PREFIX"
+MONITOR_PREFIX="$PRECONF_MONITOR_PREFIX"
+ADMIN_PUBLIC_URL="$PRECONF_ADMIN_PUBLIC_URL"
+
+upsert_env API_PREFIX "$API_PREFIX"
+upsert_env MONITOR_PREFIX "$MONITOR_PREFIX"
+upsert_env ADMIN_PUBLIC_URL "$ADMIN_PUBLIC_URL"
+upsert_env BESZEL_ADMIN_EMAIL "$PRECONF_BESZEL_EMAIL"
+upsert_env BESZEL_ADMIN_PASSWORD "$PRECONF_BESZEL_PASSWORD"
 
 if [[ "$WEB_MODE" == "external" ]]; then
-  if grep -q "^ADMIN_DOMAIN=" "$ENV_FILE" 2>/dev/null; then
-    sed -i "s|^ADMIN_DOMAIN=.*|ADMIN_DOMAIN=$ADMIN_DOMAIN|" "$ENV_FILE"
-  else
-    echo "ADMIN_DOMAIN=$ADMIN_DOMAIN" >> "$ENV_FILE"
-  fi
+  upsert_env ADMIN_DOMAIN "$ADMIN_DOMAIN"
   ok "admin-web 独立部署，API 域名: $ADMIN_DOMAIN"
 else
   # 本机部署需要放行 3000 端口
@@ -958,30 +1000,13 @@ else
 fi
 echo "$WEB_MODE" > "$DEPLOY_CONFIG"
 
-# 推导 ADMIN_PUBLIC_URL（Beszel APP_URL / monitor enter URL 用）
-# external 模式：用户提供的 ADMIN_DOMAIN，HTTPS（CF 接管）
-# local 模式：localhost 反向代理，HTTP
-if [[ "$WEB_MODE" == "external" && -n "$ADMIN_DOMAIN" ]]; then
-  ADMIN_PUBLIC_URL="https://$ADMIN_DOMAIN"
-else
-  ADMIN_PUBLIC_URL="http://localhost"
-fi
-if grep -q '^ADMIN_PUBLIC_URL=' "$ENV_FILE" 2>/dev/null; then
-  sed -i "s|^ADMIN_PUBLIC_URL=.*|ADMIN_PUBLIC_URL=$ADMIN_PUBLIC_URL|" "$ENV_FILE"
-else
-  echo "ADMIN_PUBLIC_URL=$ADMIN_PUBLIC_URL" >> "$ENV_FILE"
-fi
-
-# 提前生成 Beszel 凭证（admin-server 启动前必须就位，否则容器拿到空值，
-# /api/monitoring/launch 会报"Beszel 凭证未配置"）
-# 实际 monitor 容器在 step 14 才启动，但 admin-server 容器先 import 这两个 env
-if ! grep -q '^BESZEL_ADMIN_EMAIL=' "$ENV_FILE" 2>/dev/null; then
-  echo "BESZEL_ADMIN_EMAIL=admin@omps.local" >> "$ENV_FILE"
-fi
-if ! grep -q '^BESZEL_ADMIN_PASSWORD=' "$ENV_FILE" 2>/dev/null; then
-  BESZEL_PASS_GEN=$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 12)
-  echo "BESZEL_ADMIN_PASSWORD=$BESZEL_PASS_GEN" >> "$ENV_FILE"
-fi
+# 生成 nginx 配置（同时替换 API_PREFIX 与 MONITOR_PREFIX）
+mkdir -p /omps/admin-service/nginx
+sed -e "s/\${API_PREFIX}/$API_PREFIX/g" \
+    -e "s/\${MONITOR_PREFIX}/$MONITOR_PREFIX/g" \
+    "$SCRIPT_DIR/nginx/default.conf.template" > /omps/admin-service/nginx/default.conf
+ok "Nginx 配置已生成"
+ok "API 前缀: /$API_PREFIX  ·  监控前缀: /$MONITOR_PREFIX"
 
 # ── 9. Admin 平台 ──
 
