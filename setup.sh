@@ -287,11 +287,41 @@ if [[ "$MODE" == "update" ]]; then
     fi
   fi
 
-  # 重启 monitor hub 应用最新 APP_URL（subpath base）
-  if [[ -f "$SCRIPT_DIR/docker-compose.monitor.yml" ]]; then
-    MON_COMPOSE_UP="docker compose --env-file .env --env-file monitor-config/images.env -f docker-compose.monitor.yml"
-    run_quiet "重启 Beszel hub" $MON_COMPOSE_UP up -d --force-recreate beszel
-    ok "Beszel hub 已应用最新配置"
+  # 同步 monitor 镜像 tag 到 .env（让主 compose ${MONITOR_IMG_*} 解析到值）
+  if [[ -f "$SCRIPT_DIR/monitor-config/images.env" ]]; then
+    while IFS='=' read -r key val; do
+      [[ -z "$key" || "$key" == \#* ]] && continue
+      if grep -q "^$key=" "$ENV_FILE"; then
+        sed -i "s|^$key=.*|$key=$val|" "$ENV_FILE"
+      else
+        echo "$key=$val" >> "$ENV_FILE"
+      fi
+    done < "$SCRIPT_DIR/monitor-config/images.env"
+  fi
+
+  # 重启 monitor hub 应用最新 APP_URL/MONITOR_PREFIX（profile=monitor 显式带起）
+  # admin-server 重启后 hub（service:server）的 ns 引用失效，必须 force-recreate
+  run_quiet "重启 Beszel hub" docker compose --profile monitor up -d --force-recreate beszel
+  ok "Beszel hub 已应用最新配置"
+
+  # admin-server 重启后中心机 agent（network=container:omps-admin-server）也失联
+  # 重新 docker run 一次（hub 公钥不变，agent 只是换 ns 引用）
+  if [[ -f /omps/monitor/beszel/id_ed25519 ]]; then
+    HUB_PUBKEY=$(ssh-keygen -y -f /omps/monitor/beszel/id_ed25519 2>/dev/null)
+    BESZEL_AGENT_IMG=$(grep '^MONITOR_IMG_BESZEL_AGENT=' "$SCRIPT_DIR/monitor-config/images.env" 2>/dev/null | cut -d= -f2)
+    if [[ -n "$HUB_PUBKEY" && -n "$BESZEL_AGENT_IMG" ]]; then
+      docker rm -f omps-monitor-beszel-agent >/dev/null 2>&1 || true
+      if docker run -d --name omps-monitor-beszel-agent \
+          --network "container:omps-admin-server" --restart unless-stopped \
+          -e PORT=45876 -e KEY="$HUB_PUBKEY" \
+          -e HOST_PROC=/host/proc -e HOST_SYS=/host/sys \
+          -v /var/run/docker.sock:/var/run/docker.sock:ro \
+          -v /proc:/host/proc:ro \
+          -v /sys:/host/sys:ro \
+          "$BESZEL_AGENT_IMG" >/dev/null 2>&1; then
+        ok "中心机 Beszel agent 已重启（同 admin-server ns）"
+      fi
+    fi
   fi
 
   step "重建 CLI Server"
@@ -989,120 +1019,120 @@ fi
 step "启动监控栈"
 
 cd "$SCRIPT_DIR"
-if [[ -f "docker-compose.monitor.yml" ]]; then
-  # 拉镜像前预检：images.env + sync_monitor.go 一致性
-  # 远程 manifest 校验跳过（避免 docker hub rate limit；正常 pull 会发现 tag 错）
-  if [[ -x "$SCRIPT_DIR/scripts/verify-monitor-images.sh" ]]; then
-    if ! SKIP_REMOTE=1 "$SCRIPT_DIR/scripts/verify-monitor-images.sh" --quiet; then
-      fail "监控镜像校验失败，请按上面错误提示修复 monitor-config/images.env 后重跑"
-    fi
-    info "监控镜像校验通过"
+
+# 拉镜像前预检：images.env + sync_monitor.go 一致性
+# 远程 manifest 校验跳过（避免 docker hub rate limit；正常 pull 会发现 tag 错）
+if [[ -x "$SCRIPT_DIR/scripts/verify-monitor-images.sh" ]]; then
+  if ! SKIP_REMOTE=1 "$SCRIPT_DIR/scripts/verify-monitor-images.sh" --quiet; then
+    fail "监控镜像校验失败，请按上面错误提示修复 monitor-config/images.env 后重跑"
   fi
+  info "监控镜像校验通过"
+fi
 
-  # 清理旧监控栈容器（VictoriaMetrics / Grafana / Alertmanager / cadvisor 等）
-  # 升级到 Beszel 后这些容器没用了，避免端口冲突 + 资源浪费
-  for c in omps-monitor-vm omps-monitor-vmagent omps-monitor-vl omps-monitor-grafana \
-           omps-monitor-alertmanager omps-monitor-node-exporter omps-monitor-cadvisor \
-           omps-monitor-vector; do
-    docker rm -f "$c" 2>/dev/null || true
-  done
+# 清理旧监控栈容器（VictoriaMetrics / Grafana / Alertmanager / cadvisor 等）
+# 升级到 Beszel 后这些容器没用了，避免端口冲突 + 资源浪费
+for c in omps-monitor-vm omps-monitor-vmagent omps-monitor-vl omps-monitor-grafana \
+         omps-monitor-alertmanager omps-monitor-node-exporter omps-monitor-cadvisor \
+         omps-monitor-vector; do
+  docker rm -f "$c" 2>/dev/null || true
+done
 
-  # Beszel 数据目录（PocketBase SQLite + ed25519 公私钥）
-  sudo mkdir -p /omps/monitor/beszel 2>/dev/null || mkdir -p /omps/monitor/beszel 2>/dev/null
+# Beszel 数据目录（PocketBase SQLite + ed25519 公私钥）
+sudo mkdir -p /omps/monitor/beszel 2>/dev/null || mkdir -p /omps/monitor/beszel 2>/dev/null
 
-  # 清理旧监控数据卷（VictoriaMetrics / Grafana / Alertmanager / VictoriaLogs）
-  # Beszel 数据全在 /omps/monitor/beszel/，其他目录是旧栈遗留
-  sudo rm -rf /omps/monitor/vm /omps/monitor/vmagent /omps/monitor/vl \
-              /omps/monitor/grafana /omps/monitor/alertmanager 2>/dev/null || \
-    rm -rf /omps/monitor/vm /omps/monitor/vmagent /omps/monitor/vl \
-           /omps/monitor/grafana /omps/monitor/alertmanager 2>/dev/null || true
+# 清理旧监控数据卷（VictoriaMetrics / Grafana / Alertmanager / VictoriaLogs）
+sudo rm -rf /omps/monitor/vm /omps/monitor/vmagent /omps/monitor/vl \
+            /omps/monitor/grafana /omps/monitor/alertmanager 2>/dev/null || \
+  rm -rf /omps/monitor/vm /omps/monitor/vmagent /omps/monitor/vl \
+         /omps/monitor/grafana /omps/monitor/alertmanager 2>/dev/null || true
 
-  ENV_FILE_MON="$SCRIPT_DIR/.env"
-  touch "$ENV_FILE_MON"
-  # 清掉历史 var：MONITOR_VM_BIND / MONITOR_VL_BIND（旧 VictoriaMetrics 方案）
-  # MONITOR_BESZEL_BIND（host network 模式不需要）
-  sed -i.bak \
-    -e '/^MONITOR_BESZEL_BIND=/d' \
-    -e '/^MONITOR_VM_BIND=/d' \
-    -e '/^MONITOR_VL_BIND=/d' \
-    "$ENV_FILE_MON" 2>/dev/null || true
-  rm -f "$ENV_FILE_MON.bak" 2>/dev/null || true
+ENV_FILE_MON="$SCRIPT_DIR/.env"
+touch "$ENV_FILE_MON"
+# 清掉历史 var：旧 VictoriaMetrics 方案 + host network 时代的 MONITOR_BESZEL_BIND
+sed -i.bak \
+  -e '/^MONITOR_BESZEL_BIND=/d' \
+  -e '/^MONITOR_VM_BIND=/d' \
+  -e '/^MONITOR_VL_BIND=/d' \
+  "$ENV_FILE_MON" 2>/dev/null || true
+rm -f "$ENV_FILE_MON.bak" 2>/dev/null || true
 
-  # Beszel hub 用 host network 监听 8090，需 ufw 阻止公网直接访问
-  # 外部仅能通过 nginx /beszel/ 反代进
-  #
-  # 注意：ufw 端口级 deny 会同时挡住 Docker bridge 容器 → host:8090
-  # 而 nginx 容器（在 omps-network bridge）反代到 host.docker.internal:8090
-  # 必须先 allow 所有 Docker bridge 网段（172.16.0.0/12 覆盖 docker0/自定义 bridge）
-  # ufw 规则按顺序匹配，allow 必须在 deny 之前生效，所以先删 deny 再重新加
-  if [[ "$OS" == "Linux" ]] && command -v ufw &>/dev/null; then
-    sudo ufw delete deny 8090/tcp >/dev/null 2>&1 || true
-    sudo ufw allow from 172.16.0.0/12 to any port 8090 proto tcp \
-      comment 'Beszel hub from Docker bridges' >/dev/null 2>&1 || true
-    sudo ufw deny 8090/tcp comment 'Beszel hub deny public' >/dev/null 2>&1 || true
-    info "ufw 配置完成：允许 Docker bridge 访问 8090，公网 deny"
-  fi
-
-  # Beszel 超级管理员账号（持久化到 .env，setup 摘要输出凭证）
-  if ! grep -q '^BESZEL_ADMIN_EMAIL=' "$ENV_FILE_MON" 2>/dev/null; then
-    BESZEL_ADMIN_EMAIL_VAL="admin@omps.local"
-    BESZEL_ADMIN_PASSWORD_VAL=$(head -c 12 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 12)
-    echo "BESZEL_ADMIN_EMAIL=$BESZEL_ADMIN_EMAIL_VAL" >> "$ENV_FILE_MON"
-    echo "BESZEL_ADMIN_PASSWORD=$BESZEL_ADMIN_PASSWORD_VAL" >> "$ENV_FILE_MON"
-  fi
-  BESZEL_EMAIL=$(grep '^BESZEL_ADMIN_EMAIL=' "$ENV_FILE_MON" | cut -d= -f2)
-  BESZEL_PASSWORD=$(grep '^BESZEL_ADMIN_PASSWORD=' "$ENV_FILE_MON" | cut -d= -f2)
-
-  # 镜像 tag 来自 monitor-config/images.env（单一来源）
-  MON_COMPOSE="docker compose --env-file .env --env-file monitor-config/images.env -f docker-compose.monitor.yml"
-  run_quiet "拉镜像" $MON_COMPOSE pull
-
-  # Beszel 不通过 env 读 superuser，必须用 CLI upsert 创建
-  # 启动 hub 前先跑一次 superuser upsert（容器只读模式，写完退出）
-  BESZEL_IMG=$(grep '^MONITOR_IMG_BESZEL=' monitor-config/images.env | cut -d= -f2)
-  run_quiet "创建 Beszel 超级管理员" docker run --rm -v /omps/monitor/beszel:/beszel_data \
-    "$BESZEL_IMG" superuser upsert "$BESZEL_EMAIL" "$BESZEL_PASSWORD"
-
-  run_quiet "启动监控栈" $MON_COMPOSE up -d
-
-  info "等待 Beszel 就绪..."
-  BESZEL_READY=0
-  for i in $(seq 1 30); do
-    if curl -sf -o /dev/null "http://127.0.0.1:8090/api/health" 2>/dev/null; then BESZEL_READY=1; break; fi
-    sleep 2
-  done
-  if [[ $BESZEL_READY -eq 1 ]]; then
-    ok "Beszel hub 已启动"
-  else
-    warn "Beszel 就绪超时（127.0.0.1:8090）"
-    warn "诊断：docker logs omps-monitor-beszel --tail 50"
-  fi
-
-  # 中心机自监控：等私钥落盘后派生公钥启 host network agent
-  # 让中心机的 CPU/内存/磁盘/容器也出现在 Beszel UI
-  info "启动中心机 Beszel agent（自监控）..."
-  for i in $(seq 1 20); do
-    [[ -f /omps/monitor/beszel/id_ed25519 ]] && break
-    sleep 1
-  done
-  if [[ -f /omps/monitor/beszel/id_ed25519 ]]; then
-    HUB_PUBKEY=$(ssh-keygen -y -f /omps/monitor/beszel/id_ed25519 2>/dev/null)
-    BESZEL_AGENT_IMG=$(grep '^MONITOR_IMG_BESZEL_AGENT=' monitor-config/images.env | cut -d= -f2)
-    docker rm -f omps-monitor-beszel-agent 2>/dev/null || true
-    if docker run -d --name omps-monitor-beszel-agent \
-        --network host --restart unless-stopped \
-        -e PORT=45876 -e KEY="$HUB_PUBKEY" \
-        -v /var/run/docker.sock:/var/run/docker.sock:ro \
-        "$BESZEL_AGENT_IMG" >/dev/null 2>&1; then
-      ok "中心机 Beszel agent 已启动（监听 :45876）"
+# 同步 monitor-config/images.env 镜像 tag 到 .env，让主 compose 读到 ${MONITOR_IMG_*}
+# 重复变量以最后一次为准，所以这里 append 不会污染（compose 取最后一行）
+if [[ -f "$SCRIPT_DIR/monitor-config/images.env" ]]; then
+  while IFS='=' read -r key val; do
+    [[ -z "$key" || "$key" == \#* ]] && continue
+    if grep -q "^$key=" "$ENV_FILE_MON"; then
+      sed -i "s|^$key=.*|$key=$val|" "$ENV_FILE_MON"
     else
-      warn "中心机 Beszel agent 启动失败"
+      echo "$key=$val" >> "$ENV_FILE_MON"
     fi
+  done < "$SCRIPT_DIR/monitor-config/images.env"
+fi
+
+# 旧的 8090 端口 ufw 规则不再需要（hub 跟 admin-server 共享 net ns，不 publish）
+if [[ "$OS" == "Linux" ]] && command -v ufw &>/dev/null; then
+  sudo ufw delete deny 8090/tcp >/dev/null 2>&1 || true
+  sudo ufw delete allow from 172.16.0.0/12 to any port 8090 proto tcp >/dev/null 2>&1 || true
+fi
+
+# Beszel 凭证已在 step 8 之后生成（admin-server 启动前），这里读出来
+BESZEL_EMAIL=$(grep '^BESZEL_ADMIN_EMAIL=' "$ENV_FILE_MON" | cut -d= -f2)
+BESZEL_PASSWORD=$(grep '^BESZEL_ADMIN_PASSWORD=' "$ENV_FILE_MON" | cut -d= -f2)
+BESZEL_IMG=$(grep '^MONITOR_IMG_BESZEL=' "$SCRIPT_DIR/monitor-config/images.env" | cut -d= -f2)
+BESZEL_AGENT_IMG=$(grep '^MONITOR_IMG_BESZEL_AGENT=' "$SCRIPT_DIR/monitor-config/images.env" | cut -d= -f2)
+
+# 拉 hub 镜像（agent 镜像后面起 docker run 会自动拉）
+run_quiet "拉 Beszel hub 镜像" docker pull "$BESZEL_IMG"
+
+# Beszel 不通过 env 读 superuser，必须用 CLI upsert 写 SQLite
+# 在主 compose 起 hub 之前跑（profiles=monitor 默认不启动）
+run_quiet "创建 Beszel 超级管理员" docker run --rm -v /omps/monitor/beszel:/beszel_data \
+  "$BESZEL_IMG" superuser upsert "$BESZEL_EMAIL" "$BESZEL_PASSWORD"
+
+# 启动 hub（profile 显式开启）
+# 此时 admin-server（step 9）已经在跑，beszel 加入 server 的 net ns
+run_quiet "启动 Beszel hub" docker compose --profile monitor up -d beszel
+
+info "等待 Beszel 就绪（最多 60s）..."
+BESZEL_READY=0
+for i in $(seq 1 30); do
+  # hub 监听 admin-server 容器内 :8090，从 admin-server 容器内 curl 探测
+  if docker exec omps-admin-server curl -sf http://127.0.0.1:8090/api/health 2>/dev/null \
+       | grep -q "API is healthy"; then BESZEL_READY=1; break; fi
+  sleep 2
+done
+if [[ $BESZEL_READY -eq 1 ]]; then
+  ok "Beszel hub 已启动"
+else
+  warn "Beszel 就绪超时"
+  warn "诊断：docker logs omps-monitor-beszel --tail 50"
+fi
+
+# 中心机自监控：等私钥落盘后派生公钥，启 agent 加入 admin-server net ns
+# agent 跟 hub 同 ns，hub 走 127.0.0.1:45876 直接到 agent；wg0 也可见
+# /proc 和 /sys 挂 host 的让 gopsutil 看 host 资源
+info "启动中心机 Beszel agent（自监控）..."
+for i in $(seq 1 20); do
+  [[ -f /omps/monitor/beszel/id_ed25519 ]] && break
+  sleep 1
+done
+if [[ -f /omps/monitor/beszel/id_ed25519 ]]; then
+  HUB_PUBKEY=$(ssh-keygen -y -f /omps/monitor/beszel/id_ed25519 2>/dev/null)
+  docker rm -f omps-monitor-beszel-agent 2>/dev/null || true
+  if docker run -d --name omps-monitor-beszel-agent \
+      --network "container:omps-admin-server" --restart unless-stopped \
+      -e PORT=45876 -e KEY="$HUB_PUBKEY" \
+      -e HOST_PROC=/host/proc -e HOST_SYS=/host/sys \
+      -v /var/run/docker.sock:/var/run/docker.sock:ro \
+      -v /proc:/host/proc:ro \
+      -v /sys:/host/sys:ro \
+      "$BESZEL_AGENT_IMG" >/dev/null 2>&1; then
+    ok "中心机 Beszel agent 已启动（同 admin-server net ns，监听 :45876）"
   else
-    warn "Beszel 私钥未生成，中心机自监控跳过"
+    warn "中心机 Beszel agent 启动失败"
   fi
 else
-  warn "docker-compose.monitor.yml 不存在，跳过监控栈"
+  warn "Beszel 私钥未生成，中心机自监控跳过"
 fi
 
 # ── 10. CLI Server 启动 ──
